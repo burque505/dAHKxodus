@@ -1,0 +1,8 @@
+# built by build-engine.ps1 from the fork commit in docxodus.lock
+lib/docxodus/
+web/vendor/
+web/node_modules/
+# runtime
+logs/
+tests/**/bin/
+tests/**/obj/

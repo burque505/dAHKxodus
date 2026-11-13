@@ -1,0 +1,9 @@
+# The Docxodus fork commit dAHKxodus is built on. build-engine.ps1 builds exactly this commit and refuses any other.
+# To move to a newer fork commit: check it out in the fork's clone, build with -UpdateLock, test, commit this file
+# together with web\package-lock.json.
+repo=https://github.com/burque505/Docxodus
+branch=feat/native-session-bridge
+commit=94b4e6495e010a93a7e2288955d1d04c73c6a3d4
+# SHA-256 of web\vendor\docxodus-0.0.0.tgz, the npm package web\package-lock.json was made from. The WASM build is not
+# byte-for-byte repeatable, so a rebuild of the same commit may differ: then npm install changes package-lock.json too.
+npm-sha256=a966b9a471dc0c1ad0df54a3a8d785cc4943f627875aff42864642a164ab26fc

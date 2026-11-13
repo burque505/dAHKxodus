@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dAHKxodus</title><style>
+  html, body { margin: 0; height: 100%; background: #f3f3f3; }
+  #app { height: 100vh; }
+  .dax-ahk { margin-left: 8px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+// dAHKxodus: Docxodus's ribbon editor in a WebView2 host (dAHKxodus.cs).
+// Messages to the host:   ready, opened, saved (bytes for File > Save), ahk (a call to an AutoHotkey function), log
+// Messages from the host: open (a document's bytes), blank (nothing to open), ahkResult, measure (the headless check)
+// The loading overlay stays up from the start until the document is in, and a long document mounts window by window
+// (ribbon.openAsync, ribbon-open-async.js), so the overlay keeps moving and shows how far the mount has got.
+// The editing session runs in the host, natively in .NET (nativeSessionBridge): the page's WASM engine starts too but
+// serves only the rarely used rest of its exports. ?engine=wasm runs the session in the page; ?verify=1 runs it in both.
+const tPage = performance.now();
+const { mountRibbon, initialize, getWasmExports } = await import("./node_modules/docxodus/dist/embed.bundle.js");
+const { addOpenAsync } = await import("./ribbon-open-async.js");
+const tImported = performance.now();
+
+const host = window.chrome?.webview;
+const post = (m) => host?.postMessage(m);
+const ms = (t) => Math.round(t);
+const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+const toB64 = (bytes) => {
+  if (bytes.toBase64) return bytes.toBase64();
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const fromB64 = (b64) => Uint8Array.fromBase64 ? Uint8Array.fromBase64(b64) : Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+
+// --- The native engine: the editing session runs in the host (.NET), not in this page's WASM runtime.
+// Returns an object with the same functions as the WASM export DocxSessionBridge, each a synchronous call to the
+// host's engine object (dAHKxodus.cs, EngineHost), or null when the host has none. The host's manifest gives
+// every method's parameter and return types: bytes cross as base64, a null result or an exception as "\0..." text.
+function nativeSessionBridge() {
+  const engine = host?.hostObjects?.sync?.engine;
+  if (!engine) return null;
+  const manifest = JSON.parse(engine.Manifest());
+  const bridge = {};
+  for (const [method, sig] of Object.entries(manifest)) {
+    const [cls, name] = method.split(".");
+    if (cls !== "DocxSessionBridge") continue;
+    const bytesAt = sig.p.map((t) => t.startsWith("bytes"));
+    const ret = sig.r.replace("?", "");
+    bridge[name] = (...args) => {
+      const wire = [];
+      for (let i = 0; i < sig.p.length; i++) {
+        const a = args[i];
+        wire.push(a === undefined || a === null ? null : bytesAt[i] ? toB64(a) : a);
+      }
+      const r = engine.Call(method, JSON.stringify(wire));
+      if (r.charCodeAt(0) === 0) {
+        if (r.startsWith("\0error:")) throw new Error(r.slice(7));
+        return ret === "void" ? undefined : null;
+      }
+      switch (ret) {
+        case "void": return undefined;
+        case "int": case "long": case "double": return Number(r);
+        case "bool": return r === "true";
+        case "bytes": return fromB64(r);
+        default: return r;
+      }
+    };
+  }
+  return bridge;
+}
+
+// ?verify=1 (DAHKXODUS_VERIFY=1): every session call runs on the native engine AND on the page's WASM engine, which
+// holds a twin of each session; the editor gets the native answer, and the two answers are compared. A test of the
+// native engine, not for use: the open takes the time of both. Logs counts, method names and offsets only (no text).
+function verifyingBridge(native, wasm) {
+  const twin = new Map();                       // native session/transaction handle -> the WASM one
+  const tally = { calls: 0, same: 0, opened: 0, differ: new Map() };
+  const same = (a, b) => {
+    if (a instanceof Uint8Array && b instanceof Uint8Array) return a.length === b.length && a.every((x, i) => x === b[i]);
+    return a === b || (a == null && b == null);
+  };
+  const where = (a, b) => {                     // where two answers part, without their content
+    if (typeof a !== "string" || typeof b !== "string") return `${a?.constructor?.name ?? a} vs ${b?.constructor?.name ?? b}`;
+    let i = 0;
+    while (i < a.length && a[i] === b[i]) i++;
+    return `lengths ${a.length}/${b.length}, first difference at ${i}`;
+  };
+  const out = {};
+  for (const name of Object.keys(native)) {
+    const w = wasm[name];
+    out[name] = (...args) => {
+      const r = native[name](...args);
+      if (typeof w !== "function") return r;
+      const wargs = args.map((a, i) => (i === 0 && typeof a === "number" && twin.has(a) ? twin.get(a) : a));
+      let wr, threw = null;
+      try { wr = w(...wargs); } catch (e) { threw = e; }
+      tally.calls++;
+      if (/^(Open|Begin)/.test(name) && typeof r === "number" && typeof wr === "number") { twin.set(r, wr); tally.opened++; }
+      else if (!threw && same(r, wr)) tally.same++;
+      else {
+        const d = tally.differ.get(name) ?? { n: 0, first: threw ? "WASM threw " + threw.message : where(r, wr) };
+        d.n++;
+        tally.differ.set(name, d);
+      }
+      return r;
+    };
+  }
+  out.verifyReport = () => `${tally.calls} calls on both engines: ${tally.opened} opened twin sessions, ${tally.same} answered identically` +
+    (tally.differ.size ? "; differ: " + [...tally.differ].map(([k, d]) => `${k} ${d.n}x (${d.first})`).join("; ") : "");
+  return out;
+}
+
+// --- The AutoHotkey bridge: callAhk("LegalDate") resolves with what the AHK function returned.
+const pending = new Map();
+let nextId = 0;
+function callAhk(fn, arg = "") {
+  return new Promise((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject });
+    post({ type: "ahk", id, fn, arg: String(arg) });
+  });
+}
+window.callAhk = callAhk;
+
+let ribbon;
+let docName = "untitled.docx";
+
+// Opens with the overlay narrating the mount. Also measures how responsive the page stayed: the longest gap between
+// painted frames, and how long until the first window of paragraphs landed (the session open before it is one call).
+// Paragraphs per window: each window is one engine call with a fixed cost (~55 ms at Docxodus's default of 24, which
+// made a 9,500-paragraph document take 23 s instead of 4). ?window=N overrides it (DAHKXODUS_WINDOW in the host).
+const WINDOW_SIZE = Number(new URLSearchParams(location.search).get("window")) || 400;
+async function openBytes(bytes, name) {
+  docName = name;
+  const loader = ribbon.loader;
+  loader.show();
+  loader.stage({ title: "Opening " + name, copy: "Reading the document and laying out its paragraphs.", progress: 40, label: "Reading document" });
+  await frame(); // let the new copy paint before the engine call
+  let watching = true, last = performance.now(), longestGap = 0;
+  const watch = (now) => { longestGap = Math.max(longestGap, now - last); last = now; if (watching) requestAnimationFrame(watch); };
+  requestAnimationFrame(watch);
+  // (Profiling: time spent in each engine call during the open.)
+  const bridge = ribbon.exports?.DocxSessionBridge, calls = {}, originals = {};
+  if (bridge) for (const k of Object.keys(bridge)) {
+    if (typeof bridge[k] !== "function") continue;
+    originals[k] = bridge[k];
+    bridge[k] = (...a) => { const s = performance.now(); try { return originals[k](...a); } finally { const c = calls[k] ??= { n: 0, ms: 0 }; c.n++; c.ms += performance.now() - s; } };
+  }
+  const t = performance.now();
+  let firstWindow = 0;
+  await ribbon.openAsync(bytes, name, {
+    windowSize: WINDOW_SIZE,
+    onProgress: (mounted, total) => {
+      if (!firstWindow) firstWindow = performance.now() - t;
+      loader.progress(40 + Math.round(55 * mounted / Math.max(total, 1)), `${mounted.toLocaleString()} of ${total.toLocaleString()} paragraphs`);
+    },
+  });
+  const opened = performance.now();
+  watching = false;
+  if (bridge) {
+    Object.assign(bridge, originals);
+    const engine = Object.values(calls).reduce((s, c) => s + c.ms, 0);
+    const top = Object.entries(calls).sort((a, b) => b[1].ms - a[1].ms).slice(0, 6).map(([k, c]) => `${k} ${c.n}x ${ms(c.ms)} ms`);
+    post({ type: "log", text: `open profile (${engineKind}): engine ${ms(engine)} ms of ${ms(opened - t)} ms; ${top.join("; ")}` });
+    if (engineKind.startsWith("native")) post({ type: "engineStats" });
+  }
+  loader.done();
+  await frame();
+  const painted = performance.now();
+  const blocks = document.querySelectorAll("#app [data-anchor]").length;
+  return { open: ms(opened - t), firstWindow: ms(firstWindow), longestGap: ms(longestGap), paint: ms(painted - opened), blocks };
+}
+
+// Insert AHK's answer at the caret, as typing would (the editor commits it like any other input).
+async function insertFromAhk(fn) {
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  const t = performance.now();
+  const text = await callAhk(fn);
+  const roundTrip = performance.now() - t;
+  if (range) { sel.removeAllRanges(); sel.addRange(range); }
+  document.execCommand("insertText", false, text);
+  return { text, roundTrip: Math.round(roundTrip * 10) / 10 };
+}
+
+function addAhkButton() {
+  const save = ribbon.control("save");
+  if (!save || document.querySelector(".dax-ahk")) return;
+  const b = document.createElement("button");
+  b.className = save.className + " dax-ahk";
+  b.textContent = "AHK: date";
+  b.title = "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret";
+  b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the document's selection
+  b.addEventListener("click", () => insertFromAhk("LegalDate").catch((e) => ribbon.setStatus("AHK: " + e.message)));
+  save.after(b);
+}
+
+host?.addEventListener("message", async (e) => {
+  const m = e.data;
+  try {
+    if (m.type === "ahkResult") {
+      const p = pending.get(m.id);
+      pending.delete(m.id);
+      if (p) m.error ? p.reject(new Error(m.error)) : p.resolve(m.result);
+    } else if (m.type === "open") {
+      const r = await openBytes(fromB64(m.b64), m.name);
+      addAhkButton();
+      post({ type: "opened", ...r });
+    } else if (m.type === "blank") {
+      ribbon.openBlank();
+      ribbon.loader.done();
+      addAhkButton();
+    } else if (m.type === "measure") {
+      // Headless check: caret at the end of the first editable block, one AHK call, then save.
+      const block = document.querySelector('#app [data-anchor][contenteditable="true"]');
+      block.focus();
+      const r = document.createRange();
+      r.selectNodeContents(block);
+      r.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges(); sel.addRange(r);
+      const ahk = await insertFromAhk("LegalDate");
+      block.blur(); // the editor commits a text edit on blur
+      await frame();
+      const t = performance.now();
+      const bytes = ribbon.save();
+      const saveMs = ms(performance.now() - t);
+      // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.
+      const bridge = ribbon.exports?.DocxSessionBridge, handle = ribbon.editor?.handle;
+      if (bridge?.GetVersion && typeof handle === "number") {
+        const t0 = performance.now();
+        for (let i = 0; i < 50; i++) bridge.GetVersion(handle);
+        post({ type: "log", text: `small call (GetVersion, ${engineKind}): ${((performance.now() - t0) / 50).toFixed(2)} ms each` });
+      } else post({ type: "log", text: "small call: no editor handle to time with" });
+      const verify = nativeBridge?.verifyReport;
+      if (verify) post({ type: "log", text: "verify: " + verify() });
+      post({ type: "measured", ahk, save: saveMs, b64: toB64(bytes) });
+    }
+  } catch (err) {
+    post({ type: "log", text: "page error: " + (err?.stack || err) });
+  }
+});
+
+window.addEventListener("error", (e) => post({ type: "log", text: "error: " + e.message }));
+window.addEventListener("unhandledrejection", (e) => post({ type: "log", text: "rejection: " + (e.reason?.stack || e.reason) }));
+
+// The ribbon is mounted directly (not createRibbonEditor, which fades the overlay out as soon as the engine is up):
+// the overlay then covers the engine's start AND the document's mount, in one go.
+const tBoot = performance.now();
+ribbon = mountRibbon("#app", {
+  frame: "flush",
+  onSave: (bytes, name) => {
+    if (nativeBridge?.verifyReport) post({ type: "log", text: "verify: " + nativeBridge.verifyReport() });
+    post({ type: "saved", name, b64: toB64(bytes) });
+  },
+  onOpen: () => ribbon && addAhkButton(),
+});
+addOpenAsync(ribbon);
+ribbon.loader.stage(0);
+// The WASM runtime still starts (~200 ms): the session bridge is the host's, but the rest of the exports (the
+// converter the editor falls back to, comparison) stay the page's own. ?engine=wasm keeps the session here too.
+await initialize(new URL("./node_modules/docxodus/dist/wasm/", location.href).href);
+const wasmExports = getWasmExports();
+const params = new URLSearchParams(location.search);
+let nativeBridge = params.get("engine") === "wasm" ? null : nativeSessionBridge();
+if (nativeBridge && params.get("verify") === "1") nativeBridge = verifyingBridge(nativeBridge, wasmExports.DocxSessionBridge);
+const engineKind = nativeBridge ? (nativeBridge.verifyReport ? "native, verified against WASM" : "native") : "wasm";
+ribbon.setExports(nativeBridge ? { ...wasmExports, DocxSessionBridge: nativeBridge } : wasmExports);
+ribbon.loader.stage(1);
+post({ type: "ready", engine: engineKind, sinceNavigation: ms(performance.now()), boot: ms(performance.now() - tBoot), scripts: ms(tImported - tPage) });
+</script>
+</body>
+</html>

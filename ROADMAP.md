@@ -1,0 +1,28 @@
+# Roadmap
+
+Version numbers: 0.N.x while milestone N is under way; 0.N.0 when it is finished. 0.2.0 will be the first installer
+preview, and 1.0.0 comes when dAHKxodus can replace AhkWord for daily work.
+
+Most of what is planned changes Docxodus's editor or engine. That work goes into the fork,
+[burque505/Docxodus](https://github.com/burque505/Docxodus), in small branches that can be offered upstream.
+dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotkey.
+
+## Milestones
+
+- [ ] **0. The repository** (0.0.1): the trial's host and page, the build script and lock, headless engine checks
+- [ ] **1. Edits you can trust:** Undo and Redo by keyboard as by the buttons; Undo in steps like Word's; your own
+  name and initials on changes and comments; comments with their date; pictures stored where Word stores them
+- [ ] **2. A desktop program:** Open, Save, Save As, recent files, ask to save on close, autosave and recovery,
+  settings, print and PDF; the first installer preview (0.2.0)
+- [ ] **3. AutoHotkey:** a `Doc` object for scripts, with events; the command palette; macro recording and hotkeys;
+  event hooks; your own buttons on the ribbon
+- [ ] **4. Paste and paragraphs:** pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
+  dialog (exact indents, tab stops, keep with next...); Format Painter; Change Case; more find options
+- [ ] **5. Pages:** the ruler; section breaks; columns; line numbers; table and picture properties
+- [ ] **6. References and styles:** cross-references, updating the table of contents and fields, bookmarks; new and
+  changed styles, Copy Styles from Document
+- [ ] **7. Formats and parts:** Markdown, HTML, plain text, RTF, OpenDocument; templates and snippets
+- [ ] **8. Spanish:** the whole program, the ribbon included
+- [ ] **9. Text boxes:** editing in them, then inserting and moving them
+
+Alongside every milestone: faster opening of long documents, and the fork kept level with Docxodus itself.
