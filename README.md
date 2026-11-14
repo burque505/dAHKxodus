@@ -17,10 +17,14 @@ You need Windows 10 or 11 (with the WebView2 runtime, which Windows 11 has), [Au
    `.\build-engine.ps1`
 4. Start it: `AutoHotkey64.exe dAHKxodus.ahk [file.docx]`
 
+### As dAHKxodus.exe
+
+`vs\dAHKxodus.csproj` builds the same sources into `dAHKxodus.exe`, which starts without Csharp-in-AHK's compile. `.\build-exe.ps1` publishes it, precompiled, to `vs\publish`. You can also open `vs\dAHKxodus.slnx` in Visual Studio, where errors and the debugger point at the real files. Start it with `vs\publish\dAHKxodus.exe [file.docx]`. The exe finds `web\` and `dAHKxodus.ahk` in the folder above it, and starts `dAHKxodus.ahk /companion` beside it for the AutoHotkey bridge (AutoHotkey v2 from `DAHKXODUS_AUTOHOTKEY`, beside the exe, or where its installer put it). Running `dAHKxodus.ahk` directly stays the quick way to try a change to the sources.
+
 ## Checks
 
 - `tests\engine`: headless checks of the editing engine (`dotnet run -c Release` in that folder).
-- `AutoHotkey64.exe dAHKxodus.ahk file.docx /measure out.docx`: opens the file, makes one edit through the AutoHotkey bridge, checks Undo and Redo by keyboard, adds a comment and a picture, checks that the document reads as changed, saves it the way the program does before closing (to `out.host.docx`, never over the file opened) and checks that it then reads as unchanged, saves the copy and closes; timings and results go to `logs\dahkxodus.log`. `tests\run-measure.ps1` runs it on a desktop of its own.
+- `AutoHotkey64.exe dAHKxodus.ahk file.docx /measure out.docx`: opens the file, makes one edit through the AutoHotkey bridge, checks Undo and Redo by keyboard, adds a comment and a picture, checks that the document reads as changed, saves it the way the program does before closing (to `out.host.docx`, never over the file opened) and checks that it then reads as unchanged, saves the copy and closes; timings and results go to `logs\dahkxodus.log`. `tests\run-measure.ps1` runs it on a desktop of its own; with `-Exe`, it runs `dAHKxodus.exe` instead.
 - `tests\check-saved.ps1 out.docx`: checks that copy: the comment's author, initials and date, and the picture stored in `word/media`.
 
 ## Files

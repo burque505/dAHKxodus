@@ -1,0 +1,124 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    dAHKxodus built as dAHKxodus.exe by Visual Studio / dotnet build, from the SAME sources dAHKxodus.ahk runs through
+    Csharp-in-AHK (..\dAHKxodus.cs and the files it #loads). Nothing is copied by hand: before each build the sources
+    are read from the folder above, their Csharp-in-AHK lines (#r, #load, #:) commented out, and the result written to
+    obj\...\src with #line directives, so errors and the debugger point at the real files. (As AhkWord's vs\AhkWord.csproj.)
+    The references below must match dAHKxodus.cs's #r lines. The exe starts dAHKxodus.ahk /companion beside it for the
+    AutoHotkey bridge (VsHost.cs).
+    Build: ..\build-exe.ps1 (a ReadyToRun publish to vs\publish), or open dAHKxodus.slnx in Visual Studio.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <AssemblyName>dAHKxodus</AssemblyName>
+    <RootNamespace>dAHKxodus</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- WFO1000: the WinForms designer's serialization check; dAHKxodus's controls are made in code -->
+    <NoWarn>$(NoWarn);WFO1000;CS8618</NoWarn>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- dAHKxodus.ahk sets DOTNET_TieredPGO=0 for the same reason (see there): the engine's long opens run faster without it -->
+    <TieredPGO>false</TieredPGO>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DaxSources>$(MSBuildProjectDirectory)\..</DaxSources>
+  </PropertyGroup>
+
+  <!-- the usings Csharp-in-AHK gives every script -->
+  <ItemGroup>
+    <Using Include="System" />
+    <Using Include="System.Collections.Generic" />
+    <Using Include="System.IO" />
+    <Using Include="System.Linq" />
+    <Using Include="System.Net.Http" />
+    <Using Include="System.Threading" />
+    <Using Include="System.Threading.Tasks" />
+  </ItemGroup>
+
+  <!-- dAHKxodus.cs's #r lines -->
+  <ItemGroup>
+    <Reference Include="Microsoft.Web.WebView2.Core" HintPath="$(DaxSources)\lib\webview2\Microsoft.Web.WebView2.Core.dll" />
+    <Reference Include="Microsoft.Web.WebView2.WinForms" HintPath="$(DaxSources)\lib\webview2\Microsoft.Web.WebView2.WinForms.dll" />
+    <Reference Include="DocxodusNativeBridge" HintPath="$(DaxSources)\lib\docxodus\DocxodusNativeBridge.dll" />
+    <Reference Include="Docxodus" HintPath="$(DaxSources)\lib\docxodus\Docxodus.dll" />
+    <Reference Include="DocumentFormat.OpenXml" HintPath="$(DaxSources)\lib\docxodus\DocumentFormat.OpenXml.dll" />
+    <Reference Include="DocumentFormat.OpenXml.Framework" HintPath="$(DaxSources)\lib\docxodus\DocumentFormat.OpenXml.Framework.dll" />
+    <Reference Include="System.IO.Packaging" HintPath="$(DaxSources)\lib\docxodus\System.IO.Packaging.dll" />
+    <!-- (native: found beside Microsoft.Web.WebView2.Core.dll) -->
+    <None Include="$(DaxSources)\lib\webview2\WebView2Loader.dll" Link="WebView2Loader.dll"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- what only the exe needs -->
+  <ItemGroup>
+    <Compile Include="VsHost.cs" />
+    <None Include="..\dAHKxodus.cs;..\dax_extensions.cs;..\host\*.cs;..\dAHKxodus.ahk" Link="sources\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <UsingTask TaskName="DaxSources" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <SourceDir ParameterType="System.String" Required="true" />
+      <OutDir ParameterType="System.String" Required="true" />
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        // dAHKxodus.cs and every file it #loads (recursively), each written with its Csharp-in-AHK lines commented out
+        Directory.CreateDirectory(OutDir);
+        var done = new List<string>();
+        var queue = new Queue<string>();
+        queue.Enqueue(Path.GetFullPath(Path.Combine(SourceDir, "dAHKxodus.cs")));
+        var outputs = new List<Microsoft.Build.Framework.ITaskItem>();
+        while (queue.Count > 0) {
+          var file = queue.Dequeue();
+          if (done.Contains(file, StringComparer.OrdinalIgnoreCase)) continue;
+          done.Add(file);
+          var lines = File.ReadAllLines(file);
+          for (int i = 0; i < lines.Length; i++) {
+            var m = Regex.Match(lines[i], "^\\s*#load\\s+\"([^\"]+)\"");
+            if (m.Success) {
+              queue.Enqueue(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(file), m.Groups[1].Value)));
+              lines[i] = "//" + lines[i];
+            }
+            else if (Regex.IsMatch(lines[i], "^\\s*(#:|#r\\s)")) lines[i] = "//" + lines[i];
+          }
+          var text = "#line 1 \"" + file + "\"\r\n" + string.Join("\r\n", lines) + "\r\n";
+          // (one folder: the same file name in two source folders would collide, so the folder is part of the name)
+          var rel = file.Substring(Path.GetFullPath(SourceDir).TrimEnd('\\').Length + 1).Replace('\\', '_');
+          var target = Path.Combine(OutDir, rel);
+          if (!File.Exists(target) || File.ReadAllText(target) != text) File.WriteAllText(target, text);
+          outputs.Add(new Microsoft.Build.Utilities.TaskItem(target));
+        }
+        Files = outputs.ToArray();
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="DaxPrepareSources" BeforeTargets="CoreCompile;BeforeBuild">
+    <!-- (set here: IntermediateOutputPath is only known once the SDK's targets are read) -->
+    <PropertyGroup>
+      <DaxGenerated>$([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(IntermediateOutputPath)))src\</DaxGenerated>
+    </PropertyGroup>
+    <DaxSources SourceDir="$(DaxSources)" OutDir="$(DaxGenerated)">
+      <Output TaskParameter="Files" ItemName="DaxGeneratedFile" />
+    </DaxSources>
+    <ItemGroup>
+      <Compile Include="@(DaxGeneratedFile)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

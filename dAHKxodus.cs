@@ -15,6 +15,8 @@
 //       [2] a .docx to open (or ""), [3] measure mode: where to save the edited copy (or "").
 // The window runs on its own thread so that this script returns and AutoHotkey stays free to answer bridge calls;
 // when the window closes, the AHK script is told to exit (WM_APP + 1).
+// Built as dAHKxodus.exe (vs\dAHKxodus.csproj), the roles swap: the exe is the program, and starts dAHKxodus.ahk
+// /companion beside it, which tells the window its own (WM_COPYDATA "DAX0"); args[0] is then "0" until it does.
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -22,6 +24,7 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
+args = AppFolders.CompleteArgs?.Invoke(args) ?? args;
 var ahk = (IntPtr)long.Parse(args[0]);
 var dir = args[1];
 var start = args.Length > 2 ? args[2] : "";
@@ -42,10 +45,11 @@ var ui = new Thread(() => {
     } catch (Exception ex) {
         MainForm.Log("fatal: " + ex);
     }
-    MainForm.PostMessageW(ahk, 0x8001, IntPtr.Zero, IntPtr.Zero);
+    MainForm.PostMessageW(MainForm.Ahk, 0x8001, IntPtr.Zero, IntPtr.Zero);
 });
 ui.SetApartmentState(ApartmentState.STA);
 ui.Start();
+if (AppFolders.ProgramExe != null) ui.Join();    // (the exe ends with its window; under Csharp-in-AHK this returns)
 return 0;
 
 class MainForm : Form {
@@ -63,7 +67,8 @@ class MainForm : Form {
     }
 
     const int WM_COPYDATA = 0x004A;
-    const long CallTag = 0x44415831, ReplyOk = 0x44415832, ReplyError = 0x44415833;    // "DAX1", "DAX2", "DAX3"
+    // "DAX0" (the companion's hello), "DAX1" (a call), "DAX2", "DAX3" (its answer, its error)
+    const long Hello = 0x44415830, CallTag = 0x44415831, ReplyOk = 0x44415832, ReplyError = 0x44415833;
     const string Untitled = "untitled.docx";
     const string OpenFilter = "Word documents (*.docx;*.docm)|*.docx;*.docm|All files (*.*)|*.*";
     const string SaveFilter = "Word document (*.docx)|*.docx|Word macro-enabled document (*.docm)|*.docm";
@@ -76,7 +81,9 @@ class MainForm : Form {
     static extern IntPtr SendMessageTimeoutW(IntPtr hWnd, int msg, IntPtr wParam, ref COPYDATASTRUCT lParam,
         int flags, int timeout, out IntPtr result);
 
-    readonly IntPtr ahk;
+    /// The AHK script's window: bridge calls go there, and it is told when this window has closed. (The exe: 0 until
+    /// its companion says hello.)
+    public static IntPtr Ahk { get; private set; }
     readonly string dir, measureOut;
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     readonly EngineHost Engine = new();
@@ -94,7 +101,7 @@ class MainForm : Form {
     int nextSave;
 
     public MainForm(IntPtr ahk, string dir, string start, string measureOut) {
-        this.ahk = ahk; this.dir = dir; current = start; this.measureOut = measureOut;
+        Ahk = ahk; this.dir = dir; current = start; this.measureOut = measureOut;
         Size = new System.Drawing.Size(1400, 950);
         StartPosition = FormStartPosition.CenterScreen;
         Controls.Add(web);
@@ -104,6 +111,7 @@ class MainForm : Form {
             watchdog.Tick += (s, e) => { Log("measure: gave up after 120 s"); closeConfirmed = true; Close(); };
             watchdog.Start();
         }
+        if (AppFolders.StartCompanion != null) HandleCreated += (s, e) => AppFolders.StartCompanion(Handle);
         Load += async (s, e) => {
             try { await Init(); } catch (Exception ex) { Log("init failed: " + ex); if (measureOut != "") Close(); }
         };
@@ -408,8 +416,9 @@ class MainForm : Form {
         var ptr = Marshal.StringToHGlobalUni(text);
         try {
             reply = null;
+            if (Ahk == IntPtr.Zero) { replyIsError = true; return "AutoHotkey is not running (dAHKxodus.ahk /companion)"; }
             var cds = new COPYDATASTRUCT { dwData = (IntPtr)CallTag, cbData = (text.Length + 1) * 2, lpData = ptr };
-            var sent = SendMessageTimeoutW(ahk, WM_COPYDATA, Handle, ref cds, 0, 10000, out _);
+            var sent = SendMessageTimeoutW(Ahk, WM_COPYDATA, Handle, ref cds, 0, 10000, out _);
             if (sent == IntPtr.Zero || reply == null) { replyIsError = true; return "AutoHotkey did not answer"; }
             return reply;
         } finally {
@@ -421,6 +430,12 @@ class MainForm : Form {
         if (m.Msg == WM_COPYDATA) {
             var cds = Marshal.PtrToStructure<COPYDATASTRUCT>(m.LParam);
             var tag = (long)cds.dwData;
+            if (tag == Hello && AppFolders.ProgramExe != null) {
+                Ahk = m.WParam;
+                Log($"companion ready {clock.ElapsedMilliseconds} ms");
+                m.Result = (IntPtr)1;
+                return;
+            }
             if (tag == ReplyOk || tag == ReplyError) {
                 reply = Marshal.PtrToStringUni(cds.lpData, cds.cbData / 2).TrimEnd('\0');
                 replyIsError = tag == ReplyError;

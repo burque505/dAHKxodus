@@ -1,5 +1,7 @@
 # Runs dAHKxodus's measure mode on a desktop of its own, so its window never appears on yours (or takes the focus):
-#   .\tests\run-measure.ps1 [file.docx] [-Out out.docx] [-AutoHotkey path] [-TimeoutSeconds 150]
+#   .\tests\run-measure.ps1 [file.docx] [-Out out.docx] [-AutoHotkey path] [-TimeoutSeconds 150] [-Exe [path]]
+# -Exe: run dAHKxodus.exe (default vs\publish\dAHKxodus.exe, built by build-exe.ps1) instead of dAHKxodus.ahk; it
+# starts dAHKxodus.ahk /companion with -AutoHotkey for the bridge.
 # It opens the file (default samples\verify-mix.docx), runs the page's checks, saves the edited copy to -Out (default
 # logs\measure-out.docx) and closes; the results are the run's lines in logs\dahkxodus.log, which this prints.
 # Follow it with tests\check-saved.ps1 on the copy.
@@ -7,12 +9,14 @@ param(
     [string]$File = (Join-Path $PSScriptRoot "..\samples\verify-mix.docx"),
     [string]$Out = (Join-Path $PSScriptRoot "..\logs\measure-out.docx"),
     [string]$AutoHotkey = "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe",
-    [int]$TimeoutSeconds = 150
+    [int]$TimeoutSeconds = 150,
+    [switch]$Exe,
+    [string]$ExePath = (Join-Path $PSScriptRoot "..\vs\publish\dAHKxodus.exe")
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $File = (Resolve-Path $File).Path
-$Out = [System.IO.Path]::GetFullPath($Out)
+$Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)    # (relative to this shell's folder)
 New-Item -ItemType Directory -Force (Split-Path $Out) | Out-Null
 if (Test-Path $Out) { Remove-Item $Out }
 $log = Join-Path $root "logs\dahkxodus.log"
@@ -59,7 +63,13 @@ public static class HiddenDesktop {
 }
 "@
 
-$cmd = "`"$AutoHotkey`" `"$root\dAHKxodus.ahk`" `"$File`" /measure `"$Out`""
+if ($Exe) {
+    $ExePath = (Resolve-Path $ExePath).Path
+    $env:DAHKXODUS_AUTOHOTKEY = $AutoHotkey    # (inherited: the exe starts its companion with it)
+    $cmd = "`"$ExePath`" `"$File`" /measure `"$Out`""
+} else {
+    $cmd = "`"$AutoHotkey`" `"$root\dAHKxodus.ahk`" `"$File`" /measure `"$Out`""
+}
 $code = [HiddenDesktop]::Run($cmd, $root, $TimeoutSeconds * 1000)
 if (Test-Path $log) { Get-Content $log | Select-Object -Skip $logLines }
 if ($code -eq -1) { Write-Host "measure: stopped after $TimeoutSeconds s"; exit 1 }

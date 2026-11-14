@@ -12,3 +12,8 @@ settings.ini
 data/
 portable
 portable.txt
+# vs\dAHKxodus.csproj
+vs/bin/
+vs/obj/
+vs/publish/
+vs/.vs/

@@ -197,7 +197,7 @@ async function insertFromAhk(fn) {
 // to the desktop): typing undone and redone by Ctrl+Z / Ctrl+Shift+Z, then a comment and a picture, which the saved
 // copy carries (its comment's date and initials, the picture's part in word/media: tests\check-saved.ps1).
 async function editChecks() {
-  const results = [];
+  const results = [...unchangedResults];
   const editable = () => Array.from(document.querySelectorAll('#app p[data-anchor][contenteditable="true"]'))
     .filter((p) => !p.closest("table") && p.textContent.trim().length > 0);
   const caretAtEnd = (el) => {
@@ -246,6 +246,21 @@ async function editChecks() {
 }
 const savedOkWaiters = [];
 
+// Before the measure run edits anything: a document only opened (and looked at: the deferred work after an open has
+// run, the caret is put in it and taken out again) has no changes, so closing it must not ask to save.
+const unchangedResults = [];
+async function unchangedChecks() {
+  const state = () => `version ${ribbon.editor?.version} saved ${ribbon.savedVersion}, typed ${ribbon.typed} saved ${ribbon.savedTyped}`;
+  await new Promise((r) => setTimeout(r, 1500));
+  unchangedResults.push(`unchanged after open ${window.dax.isDirty() ? `FAILED (${state()})` : "ok"}`);
+  const block = document.querySelector('#app [data-anchor][contenteditable="true"]');
+  block.focus();
+  await frame();
+  block.blur();
+  await frame();
+  unchangedResults.push(`unchanged after a click ${window.dax.isDirty() ? `FAILED (${state()})` : "ok"}`);
+}
+
 function addAhkButton() {
   const save = ribbon.control("save");
   if (!save || document.querySelector(".dax-ahk")) return;
@@ -291,6 +306,7 @@ host?.addEventListener("message", async (e) => {
       ribbon.setRecent(m.entries);
     } else if (m.type === "measure") {
       // Headless check: caret at the end of the first editable block, one AHK call, then save.
+      await unchangedChecks();
       const block = document.querySelector('#app [data-anchor][contenteditable="true"]');
       block.focus();
       const r = document.createRange();

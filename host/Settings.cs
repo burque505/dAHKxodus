@@ -10,6 +10,16 @@ public static class AppFolders {
     /// The program's folder (dAHKxodus.ahk's): set before anything else is read.
     public static string ProgramFolder { get; set; } = AppContext.BaseDirectory;
 
+    /// dAHKxodus.exe when the program runs as its own exe (set by vs\VsHost.cs); null when dAHKxodus.ahk runs it
+    /// through Csharp-in-AHK.
+    public static string? ProgramExe { get; set; }
+
+    /// (The exe) Turns its command line, [file.docx] [/measure out.docx], into the arguments dAHKxodus.ahk passes.
+    public static Func<string[], string[]>? CompleteArgs { get; set; }
+
+    /// (The exe) Starts dAHKxodus.ahk beside it as the bridge's AutoHotkey side, given the window to report to.
+    public static Action<IntPtr>? StartCompanion { get; set; }
+
     public static bool Portable =>
         File.Exists(Path.Combine(ProgramFolder, "portable")) || File.Exists(Path.Combine(ProgramFolder, "portable.txt"));
 

@@ -1,4 +1,5 @@
-// ribbon.openAsync(bytes, name, { onProgress, windowSize }): the ribbon's open() (docxodus dist/ribbon.js, 16.0.0)
+// ribbon.openAsync(bytes, name, { onProgress, windowSize }): the ribbon's open() (the fork's npm/src/ribbon.ts, as of
+// integration/m2: with markSaved and the dirty checks of feat/ribbon-host-files)
 // with DocxEditor.openAsync in place of DocxEditor.open, so a long document mounts window by window and the page
 // keeps painting (the loader can show progress) instead of freezing for the whole render.
 // Docxodus's ribbon has no such method yet: this is the shape proposed for it (RibbonEditor.openAsync); until then
@@ -26,12 +27,13 @@ export function addOpenAsync(ribbon) {
       fitToWidth: this.options.fitToWidth,
       onEdit: (info) => {
         this.history?.edited();
+        this.scheduleDirtyCheck();
         this.options.onEdit?.(info);
         this.scheduleStats();
       },
-      onMove: (info) => { this.history?.edited(); this.options.onMove?.(info); },
+      onMove: (info) => { this.history?.edited(); this.scheduleDirtyCheck(); this.options.onMove?.(info); },
       onStoryChange: (which) => this.onStoryChange(which),
-      onCommentsChange: (info) => this.onCommentsChange(info),
+      onCommentsChange: (info) => { this.scheduleDirtyCheck(); this.onCommentsChange(info); },
       paginated,
       headerFooter: this.headerFooter,
       blockDrag: this.options.blockDrag ?? true,
@@ -55,6 +57,7 @@ export function addOpenAsync(ribbon) {
     this.require("docname").textContent = this.documentName;
     this.closeFindBar();
     this.history?.documentOpened(this.documentName);
+    this.markSaved(); // a document just opened is unchanged (isDirty; the host's ask-to-save)
     const saveButton = this.control("save");
     if (saveButton)
       saveButton.disabled = false;

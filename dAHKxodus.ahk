@@ -45,6 +45,22 @@ BridgeReceive(wParam, lParam, msg, hwnd) {
     return 1
 }
 
+; dAHKxodus.exe (vs\dAHKxodus.csproj) is the program and starts this script beside it as the bridge's AutoHotkey side:
+;   AutoHotkey64.exe dAHKxodus.ahk /companion <window>
+; It tells that window its own (WM_COPYDATA "DAX0"), answers its calls, and ends when the window is gone (the window
+; posts WM_APP + 1 as it closes; the timer catches a window that ended without saying so).
+if A_Args.Length >= 2 && A_Args[1] = "/companion" {
+    Editor := A_Args[2] + 0
+    cds := Buffer(24, 0)
+    NumPut("uptr", 0x44415830, cds, 0)
+    DetectHiddenWindows(true)
+    try SendMessage(0x004A, A_ScriptHwnd, cds.Ptr, , "ahk_id " Editor, , , , 10000)
+    catch
+        ExitApp(1)
+    SetTimer(() => WinExist("ahk_id " Editor) || ExitApp(), 1000)
+    return
+}
+
 StartFile := "", MeasureOut := ""
 for i, a in A_Args {
     if a = "/measure"

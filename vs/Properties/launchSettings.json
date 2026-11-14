@@ -1,0 +1,14 @@
+{
+  "profiles": {
+    "dAHKxodus (verify-mix.docx)": {
+      "commandName": "Project",
+      "commandLineArgs": "samples/verify-mix.docx",
+      "workingDirectory": "..",
+      "nativeDebugging": false
+    },
+    "dAHKxodus (no document)": {
+      "commandName": "Project",
+      "workingDirectory": ".."
+    }
+  }
+}
