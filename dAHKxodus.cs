@@ -9,6 +9,8 @@
 #r "lib\docxodus\System.IO.Packaging.dll"
 // (the Docxodus engine, run natively: build-engine.ps1 builds it from the Docxodus fork and copies it here)
 #load "host\Settings.cs"
+#load "host\Lang.cs"
+#load "host\SettingsDialog.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
 // args: [0] the AHK script's window (bridge calls go there as WM_COPYDATA), [1] the program folder,
@@ -34,6 +36,7 @@ MainForm.LogPath = Path.Combine(dir, "logs", "dahkxodus.log");
 MainForm.Log("---- start " + (start == "" ? "(no document)" : Path.GetFileName(start)) + (measureOut != "" ? " [measure]" : "")
     + (AppFolders.Portable ? " [portable]" : ""));
 Settings.Init();
+Lang.Load();
 
 var ui = new Thread(() => {
     try {
@@ -69,9 +72,7 @@ class MainForm : Form {
     const int WM_COPYDATA = 0x004A;
     // "DAX0" (the companion's hello), "DAX1" (a call), "DAX2", "DAX3" (its answer, its error)
     const long Hello = 0x44415830, CallTag = 0x44415831, ReplyOk = 0x44415832, ReplyError = 0x44415833;
-    const string Untitled = "untitled.docx";
-    const string OpenFilter = "Word documents (*.docx;*.docm)|*.docx;*.docm|All files (*.*)|*.*";
-    const string SaveFilter = "Word document (*.docx)|*.docx|Word macro-enabled document (*.docm)|*.docm";
+    static string Untitled => Lang.T("file.untitled");
 
     [StructLayout(LayoutKind.Sequential)]
     struct COPYDATASTRUCT { public IntPtr dwData; public int cbData; public IntPtr lpData; }
@@ -99,12 +100,15 @@ class MainForm : Form {
     // Saves the host asked the page for (the page answers "saved" with the id): Save or Save As, and who waits.
     readonly Dictionary<int, (bool saveAs, TaskCompletionSource<bool> done)> pendingSaves = new();
     int nextSave;
+    // The page's view as it last reported it ("view"): settings.ini's [View] when the window closes.
+    Dictionary<string, string>? view;
 
     public MainForm(IntPtr ahk, string dir, string start, string measureOut) {
         Ahk = ahk; this.dir = dir; current = start; this.measureOut = measureOut;
         Size = new System.Drawing.Size(1400, 950);
         StartPosition = FormStartPosition.CenterScreen;
         Controls.Add(web);
+        if (measureOut == "") WindowPlacement.Restore(this);    // (a measure run keeps the defaults: its runs compare)
         UpdateTitle();
         if (measureOut != "") {    // a measure run that goes wrong still closes
             var watchdog = new System.Windows.Forms.Timer { Interval = 120000 };
@@ -146,9 +150,15 @@ class MainForm : Form {
         if (!string.IsNullOrEmpty(engine)) query.Add("engine=" + Uri.EscapeDataString(engine));
         if (Environment.GetEnvironmentVariable("DAHKXODUS_VERIFY") == "1") query.Add("verify=1");    // (both engines, compared)
         var (user, initials, from) = UserIdentity.Read();
-        Log($"user \"{user}\"{(initials == "" ? "" : $" ({initials})")} from {from}");
+        Log($"user \"{user}\"{(initials == "" ? "" : $" ({initials})")} from {from}; language {Lang.Code}");
         query.Add("user=" + Uri.EscapeDataString(user));
         if (initials != "") query.Add("initials=" + Uri.EscapeDataString(initials));
+        // The view the last window closed with: page or continuous, zoom, comments, the rail (not for a measure run).
+        if (measureOut == "")
+            foreach (var key in new[] { "Paginated", "Zoom", "Comments", "Rail" }) {
+                var value = Settings.Get("View", key);
+                if (value != "") query.Add(key.ToLowerInvariant() + "=" + Uri.EscapeDataString(value));
+            }
         cw.Navigate("https://app.example/index.html" + (query.Count == 0 ? "" : "?" + string.Join("&", query)));
     }
 
@@ -158,6 +168,44 @@ class MainForm : Form {
 
     // "*report.docx - dAHKxodus": the star while the document has changes not saved.
     void UpdateTitle() => Text = (dirty ? "*" : "") + DocName + " - dAHKxodus";
+
+    // The labels the page adds to the ribbon, in the user's language.
+    void SendUi() => Send(new {
+        type = "ui", settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
+        ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"),
+    });
+
+    // ---- Settings
+
+    void ShowSettings() {
+        if (asking || measureOut != "") return;
+        DialogResult answer;
+        asking = true;
+        try {
+            using var dlg = new SettingsDialog();
+            answer = dlg.ShowDialog(this);
+        } finally { asking = false; }
+        if (answer != DialogResult.OK) return;
+        // What changed applies now: the host's language, the recent list, and the name on new comments and changes.
+        Lang.Load();
+        UpdateTitle();
+        SendUi();
+        SendRecent();
+        var (user, initials, from) = UserIdentity.Read();
+        Log($"settings changed: user \"{user}\" from {from}, language {Lang.Code}, recent {RecentFiles.Max}");
+        Send(new { type = "user", name = user, initials });
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e) {
+        if (measureOut == "") {
+            try {
+                WindowPlacement.Save(this);
+                if (view != null)
+                    Settings.Update(() => { foreach (var (k, v) in view) Settings.Set("View", k, v); });
+            } catch (Exception ex) { Log("settings at close: " + ex.Message); }
+        }
+        base.OnFormClosed(e);
+    }
 
     void SendRecent() {
         if (web.CoreWebView2 == null) return;
@@ -173,7 +221,7 @@ class MainForm : Form {
             bytes = File.ReadAllBytes(path);
         } catch (Exception ex) {
             Log($"open {path} failed: {ex.Message}");
-            if (measureOut == "") MessageBox.Show(this, $"dAHKxodus could not open {path}:\n\n{ex.Message}", "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (measureOut == "") MessageBox.Show(this, Lang.T("file.openFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
             if (ex is FileNotFoundException or DirectoryNotFoundException) { RecentFiles.Remove(path); SendRecent(); }
             return;
         }
@@ -199,7 +247,7 @@ class MainForm : Form {
         asking = true;
         try {
             using var dlg = new OpenFileDialog {
-                Filter = OpenFilter,
+                Filter = Lang.T("file.filterOpen"),
                 InitialDirectory = current != "" ? Path.GetDirectoryName(current) : "",
             };
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
@@ -242,7 +290,7 @@ class MainForm : Form {
             asking = true;
             try {
                 using var dlg = new SaveFileDialog {
-                    Filter = SaveFilter, FileName = DocName, OverwritePrompt = true, AddExtension = true,
+                    Filter = Lang.T("file.filterSave"), FileName = DocName, OverwritePrompt = true, AddExtension = true,
                     FilterIndex = DocName.EndsWith(".docm", StringComparison.OrdinalIgnoreCase) ? 2 : 1,
                     InitialDirectory = current != "" ? Path.GetDirectoryName(current) : "",
                 };
@@ -254,7 +302,7 @@ class MainForm : Form {
             WriteAtomically(path, bytes);
         } catch (Exception ex) {
             Log($"save {path} failed: {ex.Message}");
-            MessageBox.Show(this, $"dAHKxodus could not save {path}:\n\n{ex.Message}", "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, Lang.T("file.saveFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
         current = Path.GetFullPath(path);
@@ -304,7 +352,7 @@ class MainForm : Form {
         asking = true;
         DialogResult answer;
         try {
-            answer = MessageBox.Show(this, $"Do you want to save the changes to {DocName}?", "dAHKxodus",
+            answer = MessageBox.Show(this, Lang.T("file.askSave", DocName), "dAHKxodus",
                 MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
         } finally { asking = false; }
         if (answer == DialogResult.Cancel) return false;
@@ -333,7 +381,11 @@ class MainForm : Form {
             switch (Str("type")) {
                 case "ready":
                     Log($"editor ready {clock.ElapsedMilliseconds} ms ({Str("engine")} engine; page: {Str("sinceNavigation")} ms since navigation, scripts {Str("scripts")} ms, boot {Str("boot")} ms)");
+                    SendUi();
                     if (measureOut == "") SendRecent();
+                    // Started without a document: the last one, if the user wants that (and it is still there).
+                    if (current == "" && measureOut == "" && Settings.GetBool("General", "OpenLastAtStart", false))
+                        current = RecentFiles.List().FirstOrDefault(File.Exists) ?? "";
                     if (current != "") OpenFile(current);
                     else Send(new { type = "blank", name = Untitled });
                     break;
@@ -343,7 +395,7 @@ class MainForm : Form {
                     break;
                 case "openFailed":
                     Log("open failed in the page: " + Str("error"));
-                    MessageBox.Show(this, $"dAHKxodus could not open {DocName}:\n\n{Str("error")}", "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show(this, Lang.T("file.openFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     current = "";
                     UpdateTitle();
                     Send(new { type = "blank", name = Untitled });
@@ -363,7 +415,20 @@ class MainForm : Form {
                     var failedId = m.TryGetProperty("id", out var fid) && fid.ValueKind == JsonValueKind.Number ? fid.GetInt32() : 0;
                     Log("save failed in the page: " + Str("error"));
                     if (pendingSaves.Remove(failedId, out var failed)) failed.done.TrySetResult(false);
-                    MessageBox.Show(this, $"dAHKxodus could not save {DocName}:\n\n{Str("error")}", "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show(this, Lang.T("file.saveFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    break;
+                case "settingsRequest":
+                    BeginInvoke(ShowSettings);    // (not inside the page's message: the dialog runs its own loop)
+                    break;
+                case "view":    // the page's view changed: kept for settings.ini's [View] at close
+                    view = new() {
+                        ["Paginated"] = Str("paginated") is "True" or "true" ? "1" : "0",
+                        ["Zoom"] = m.TryGetProperty("zoom", out var z) && z.ValueKind == JsonValueKind.Number
+                            ? z.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture) : "",
+                        ["Comments"] = Str("comments") is "True" or "true" ? "1" : "0",
+                        ["Rail"] = Str("rail") is "True" or "true" ? "1" : "0",
+                    };
+                    if (view["Zoom"] == "") view.Remove("Zoom");
                     break;
                 case "dirty":
                     dirty = Str("dirty") == "True" || Str("dirty") == "true";
@@ -400,6 +465,9 @@ class MainForm : Form {
                 case "log":
                     Log("page: " + Str("text"));
                     break;
+                case "capture":    // (measure runs) a picture of the editor as it shows: logs\<name>.png
+                    if (measureOut != "") _ = CaptureAsync(Str("name"));
+                    break;
                 case "engineStats":    // time spent in the native engine itself (the page's own timing adds the crossing)
                     Log("host: " + Engine.TakeStats());
                     break;
@@ -409,6 +477,16 @@ class MainForm : Form {
         }
     }
 
+    async Task CaptureAsync(string name) {
+        try {
+            var path = Path.Combine(dir, "logs", Path.GetFileName(name) + ".png");
+            using (var file = File.Create(path))
+                await web.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, file);
+            Log("captured " + path);
+            Send(new { type = "captured", name });
+        } catch (Exception ex) { Log("capture failed: " + ex.Message); Send(new { type = "captured", name }); }
+    }
+
     // Calls Bridge.<fn>(arg) in dAHKxodus.ahk. AutoHotkey answers with WM_COPYDATA to this window while we wait
     // (a thread waiting in SendMessage still takes messages sent to it), so the answer is there when SendMessage returns.
     string CallAhk(string fn, string arg) {
@@ -416,10 +494,10 @@ class MainForm : Form {
         var ptr = Marshal.StringToHGlobalUni(text);
         try {
             reply = null;
-            if (Ahk == IntPtr.Zero) { replyIsError = true; return "AutoHotkey is not running (dAHKxodus.ahk /companion)"; }
+            if (Ahk == IntPtr.Zero) { replyIsError = true; return Lang.T("bridge.notRunning"); }
             var cds = new COPYDATASTRUCT { dwData = (IntPtr)CallTag, cbData = (text.Length + 1) * 2, lpData = ptr };
             var sent = SendMessageTimeoutW(Ahk, WM_COPYDATA, Handle, ref cds, 0, 10000, out _);
-            if (sent == IntPtr.Zero || reply == null) { replyIsError = true; return "AutoHotkey did not answer"; }
+            if (sent == IntPtr.Zero || reply == null) { replyIsError = true; return Lang.T("bridge.noAnswer"); }
             return reply;
         } finally {
             Marshal.FreeHGlobal(ptr);
@@ -490,11 +568,16 @@ static class UserIdentity {
     public static (string Name, string Initials, string From) Read() {
         var name = Settings.Get("User", "Name");
         if (name != "") return (name, Settings.Get("User", "Initials"), "settings.ini");
+        return ReadFallback();
+    }
+
+    /// Who the user is when settings.ini doesn't say (the Settings dialog shows it).
+    public static (string Name, string Initials, string From) ReadFallback() {
         try {
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Office\Common\UserInfo");
-            name = (key?.GetValue("UserName") as string)?.Trim() ?? "";
-            if (name != "") return (name, (key?.GetValue("UserInitials") as string)?.Trim() ?? "", "Office user information");
+            var name = (key?.GetValue("UserName") as string)?.Trim() ?? "";
+            if (name != "") return (name, (key?.GetValue("UserInitials") as string)?.Trim() ?? "", Lang.T("identity.office"));
         } catch { }
-        return (Environment.UserName, "", "the Windows account");
+        return (Environment.UserName, "", Lang.T("identity.windows"));
     }
 }

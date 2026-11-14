@@ -1,0 +1,36 @@
+{
+  "language.name": "Español",
+
+  "file.untitled": "sin título.docx",
+  "file.filterOpen": "Documentos de Word (*.docx;*.docm)|*.docx;*.docm|Todos los archivos (*.*)|*.*",
+  "file.filterSave": "Documento de Word (*.docx)|*.docx|Documento de Word habilitado para macros (*.docm)|*.docm",
+  "file.openFailed": "dAHKxodus no pudo abrir {0}:\n\n{1}",
+  "file.saveFailed": "dAHKxodus no pudo guardar {0}:\n\n{1}",
+  "file.askSave": "¿Desea guardar los cambios en {0}?",
+
+  "bridge.noAnswer": "AutoHotkey no respondió",
+  "bridge.notRunning": "AutoHotkey no se está ejecutando",
+
+  "page.settings": "Configuración",
+  "page.settingsTip": "Configuración de dAHKxodus (Ctrl+,)",
+  "page.ahk": "AHK: fecha",
+  "page.ahkTip": "Pide a AutoHotkey la fecha de hoy (LegalDate en dAHKxodus.ahk) y la escribe en el cursor",
+
+  "identity.office": "la información de usuario de Office",
+  "identity.windows": "la cuenta de Windows",
+
+  "settings.title": "Configuración",
+  "settings.you": "Su nombre en comentarios y cambios",
+  "settings.name": "&Nombre:",
+  "settings.initials": "&Iniciales:",
+  "settings.empty": "Si se deja vacío: {0} ({1})",
+  "settings.general": "General",
+  "settings.language": "&Idioma:",
+  "settings.languageAuto": "Automático ({0})",
+  "settings.recent": "Documentos &recientes en la lista:",
+  "settings.openLast": "&Abrir el último documento cuando dAHKxodus se inicia sin ninguno",
+  "settings.autosave": "&Guardar una copia de recuperación cada (minutos, 0 = nunca):",
+  "settings.folder": "Carpeta de configuración",
+  "settings.ok": "Aceptar",
+  "settings.cancel": "Cancelar"
+}

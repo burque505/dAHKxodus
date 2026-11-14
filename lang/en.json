@@ -1,0 +1,36 @@
+{
+  "language.name": "English",
+
+  "file.untitled": "untitled.docx",
+  "file.filterOpen": "Word documents (*.docx;*.docm)|*.docx;*.docm|All files (*.*)|*.*",
+  "file.filterSave": "Word document (*.docx)|*.docx|Word macro-enabled document (*.docm)|*.docm",
+  "file.openFailed": "dAHKxodus could not open {0}:\n\n{1}",
+  "file.saveFailed": "dAHKxodus could not save {0}:\n\n{1}",
+  "file.askSave": "Do you want to save the changes to {0}?",
+
+  "bridge.noAnswer": "AutoHotkey did not answer",
+  "bridge.notRunning": "AutoHotkey is not running",
+
+  "page.settings": "Settings",
+  "page.settingsTip": "dAHKxodus's settings (Ctrl+,)",
+  "page.ahk": "AHK: date",
+  "page.ahkTip": "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
+
+  "identity.office": "Office user information",
+  "identity.windows": "the Windows account",
+
+  "settings.title": "Settings",
+  "settings.you": "Your name on comments and changes",
+  "settings.name": "&Name:",
+  "settings.initials": "&Initials:",
+  "settings.empty": "Left empty: {0} ({1})",
+  "settings.general": "General",
+  "settings.language": "&Language:",
+  "settings.languageAuto": "Automatic ({0})",
+  "settings.recent": "&Recent documents listed:",
+  "settings.openLast": "&Open the last document when dAHKxodus starts without one",
+  "settings.autosave": "&Save a recovery copy every (minutes, 0 = never):",
+  "settings.folder": "Settings folder",
+  "settings.ok": "OK",
+  "settings.cancel": "Cancel"
+}

@@ -14,10 +14,11 @@
 // dAHKxodus: Docxodus's ribbon editor in a WebView2 host (dAHKxodus.cs).
 // Messages to the host:   ready, opened, openFailed, saved (the document's bytes: Save, or the host's "save" with its
 //                         id), dirty (the document changed or was saved), newRequest, openRequest, openRecent (a
-//                         path), saveAsRequest, drop (files dropped on the page, as additional objects), ahk (a call
-//                         to an AutoHotkey function), log
+//                         path), saveAsRequest, settingsRequest, view (the view changed), drop (files dropped on the
+//                         page, as additional objects), ahk (a call to an AutoHotkey function), log
 // Messages from the host: open (a document's bytes), blank (a new document), save (send the bytes back, with the
-//                         id), savedOk (the file is written), recent (the recent documents), ahkResult, measure
+//                         id), savedOk (the file is written), recent (the recent documents), ui (labels in the user's
+//                         language), user (a new name and initials), ahkResult, measure
 // The host owns the files: New, Open, the Recent list and Save go to it, and it asks to save a changed document
 // before replacing or closing it (window.dax.isDirty()).
 // The loading overlay stays up from the start until the document is in, and a long document mounts window by window
@@ -158,6 +159,7 @@ async function openBytes(bytes, name) {
   }
   const t = performance.now();
   let firstWindow = 0;
+  openInContinuousView();
   await ribbon.openAsync(bytes, name, {
     windowSize: WINDOW_SIZE,
     onProgress: (mounted, total) => {
@@ -246,6 +248,132 @@ async function editChecks() {
 }
 const savedOkWaiters = [];
 
+// (Measure runs) The host's picture of the editor as it shows, logs\<name>.png; resolves when it is written.
+const captureWaiters = new Map();
+function capture(name) {
+  return new Promise((resolve) => {
+    captureWaiters.set(name, resolve);
+    setTimeout(() => { captureWaiters.delete(name); resolve(); }, 5000);
+    post({ type: "capture", name });
+  });
+}
+
+// The ribbon's Numbering and Increase indent buttons, as clicks would: three neighbouring paragraphs numbered, the
+// middle one indented. Word shows "1.", "a.", "2." (a nested level steps to the next number format).
+async function numberingChecks() {
+  const blocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'))
+    .filter((p) => !p.closest("table") && p.textContent.trim().length > 0);
+  const all = blocks();
+  let run = -1;
+  for (let i = 0; i + 2 < all.length && run < 0; i++)
+    if (all[i].nextElementSibling === all[i + 1] && all[i + 1].nextElementSibling === all[i + 2]
+        && ![all[i], all[i + 1], all[i + 2]].some((p) => p.dataset.anchor?.startsWith("li"))) run = i;
+  if (run < 0) return "no three neighbouring paragraphs";
+  const keys = all.slice(run, run + 3).map((p) => p.textContent.trim().slice(0, 24));
+  const find = (key) => blocks().find((p) => p.textContent.includes(key));
+  const click = (selector) => ribbon.element?.querySelector?.(selector) ?? document.querySelector(`#app ${selector}`);
+  for (const key of keys) {
+    const p = find(key);
+    p.focus();
+    click('button[data-list="decimal"]').click();
+    await frame();
+  }
+  find(keys[1]).focus();
+  click('button[data-indent="720"]').click();
+  await frame();
+  const labels = keys.map((key) => {
+    const text = find(key)?.textContent.trim() ?? "";
+    return text.slice(0, Math.max(0, text.indexOf(key))).trim() || "(none)";
+  });
+  const ok = labels[0] === "1." && labels[1] === "a." && labels[2] === "2.";
+  return `labels ${labels.join(" | ")} ${ok ? "ok" : "FAILED"}`;
+}
+
+// The ribbon's Table button, as a click would: the caret in a paragraph, the grid opened, a cell pressed (2 rows, 3
+// columns). In page view and in continuous view; reports the tables in the document before and after, and what the
+// ribbon's rail and status say.
+async function tablePickerChecks() {
+  const out = [];
+  for (const paginated of [true, false]) {
+    applyView({ paginated });
+    await frame();
+    const block = Array.from(document.querySelectorAll('#app p[data-anchor][contenteditable="true"]'))
+      .find((p) => !p.closest("table") && p.textContent.trim().length > 0);
+    if (!block) { out.push(`${paginated ? "page" : "continuous"}: no paragraph`); continue; }
+    block.focus();
+    const r = document.createRange();
+    r.selectNodeContents(block); r.collapse(false);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    const before = document.querySelectorAll("#app table").length;
+    const button = ribbon.control("table");
+    button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    button.click();
+    const picker = ribbon.control("gridpicker");
+    const opened = picker?.hasAttribute("data-open");
+    const cell = ribbon.control("gridcells")?.querySelector('[data-r="1"][data-c="2"]');
+    let error = "";
+    try {
+      cell?.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      cell?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    } catch (err) { error = " error " + err.message; }
+    await frame();
+    const after = document.querySelectorAll("#app table").length;
+    out.push(`${paginated ? "page" : "continuous"}: picker ${opened ? "opened" : "NOT opened"}, cell ${cell ? "found" : "MISSING"}, `
+      + `tables ${before} -> ${after} ${after > before ? "ok" : "FAILED"}, closed ${picker?.hasAttribute("data-open") ? "no" : "yes"}, `
+      + `rail "${ribbon.control("railOp")?.textContent ?? ""}", status "${ribbon.control("status")?.textContent ?? ""}"${error}`);
+  }
+  // A new blank document: the grid pressed before the document was ever clicked, then with the caret in its paragraph;
+  // then (the user's case) in page view. Tables counted only when they show (a size, and not inside a hidden element).
+  // (showing: a size, laid out, and its cells' borders drawn: a borderless empty table looks like nothing at all)
+  const shown = () => Array.from(document.querySelectorAll("#app table"))
+    .filter((t) => {
+      const b = t.getBoundingClientRect(), td = t.querySelector("td, th");
+      return b.width > 0 && b.height > 0 && t.offsetParent !== null && !!td && getComputedStyle(td).borderTopStyle !== "none";
+    });
+  const describe = (t) => {
+    if (!t) return "none";
+    const b = t.getBoundingClientRect();
+    const chain = [];
+    for (let e = t.parentElement; e && e.id !== "app" && chain.length < 5; e = e.parentElement)
+      chain.push(`${e.tagName.toLowerCase()}${e.className ? "." + String(e.className).trim().split(/\s+/).join(".") : ""}`);
+    const td = t.querySelector("td, th");
+    const cs = td ? getComputedStyle(td) : null;
+    return `${Math.round(b.width)}x${Math.round(b.height)} at ${Math.round(b.left)},${Math.round(b.top)}, `
+      + `${t.offsetParent ? "" : "NOT "}laid out, in ${chain.join(" < ")}; ${t.rows?.length} rows, ${td ? td.parentElement.cells.length : 0} cells a row, `
+      + `cell border ${cs ? `${cs.borderTopStyle} ${cs.borderTopWidth} ${cs.borderTopColor}` : "-"}, cell ${td ? Math.round(td.getBoundingClientRect().height) : 0}px high, `
+      + `borderless option ${ribbon.control("gridborderless")?.checked}; html ${t.outerHTML.slice(0, 300).replace(/\s+/g, " ")}`;
+  };
+  for (const [caret, paginated] of [[false, false], [true, false], [false, true]]) {
+    savedView.paginated = paginated;
+    openInContinuousView();
+    ribbon.openBlank("blank.docx");
+    applyView(savedView); caretAtStart();
+    await frame();
+    window.getSelection().removeAllRanges();
+    document.activeElement?.blur?.();
+    if (caret) {
+      const p = document.querySelector('#app [data-anchor][contenteditable="true"]');
+      p?.focus();
+      const r = document.createRange(); r.selectNodeContents(p); r.collapse(true);
+      window.getSelection().addRange(r);
+    }
+    const before = document.querySelectorAll("#app table").length;
+    ribbon.control("table").click();
+    const cell = ribbon.control("gridcells")?.querySelector('[data-r="1"][data-c="2"]');
+    cell?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    await frame();
+    const after = document.querySelectorAll("#app table").length;
+    const visible = shown();
+    out.push(`blank${paginated ? " in page view" : ""}, ${caret ? "caret in it" : "never clicked"}: tables ${before} -> ${after}, `
+      + `${visible.length} showing ${visible.length > 0 ? "ok" : "FAILED"}, `
+      + `closed ${ribbon.control("gridpicker")?.hasAttribute("data-open") ? "no" : "yes"}, rail "${ribbon.control("railOp")?.textContent ?? ""}"; `
+      + `table: ${describe(document.querySelector("#app table"))}`);
+    if (paginated) await capture("measure-table-page-view");
+  }
+  savedView.paginated = false;
+  return out.join("; ");
+}
+
 // Before the measure run edits anything: a document only opened (and looked at: the deferred work after an open has
 // run, the caret is put in it and taken out again) has no changes, so closing it must not ask to save.
 const unchangedResults = [];
@@ -259,19 +387,120 @@ async function unchangedChecks() {
   block.blur();
   await frame();
   unchangedResults.push(`unchanged after a click ${window.dax.isDirty() ? `FAILED (${state()})` : "ok"}`);
+  // The view as settings restore it (page view, zoom, comments and the rail switched), then back: not a change.
+  const before = viewState();
+  applyView({ paginated: !before.paginated, zoom: 1.5, comments: !before.comments, rail: !before.rail });
+  await frame();
+  const switched = viewState();
+  const applied = switched.paginated !== before.paginated && Math.abs(switched.zoom - 1.5) < 1e-6
+    && switched.comments !== before.comments && switched.rail !== before.rail;
+  applyView(before);
+  await frame();
+  unchangedResults.push(`view restored ${applied ? "ok" : `FAILED (${JSON.stringify(switched)})`}`);
+  unchangedResults.push(`unchanged after view changes ${window.dax.isDirty() ? `FAILED (${state()})` : "ok"}`);
 }
 
+// The host's labels for the buttons below, in the user's language (its "ui" message).
+const ui = {
+  settings: "Settings", settingsTip: "dAHKxodus's settings (Ctrl+,)",
+  ahk: "AHK: date", ahkTip: "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
+};
+function labelButtons() {
+  const ahk = document.querySelector(".dax-ahk"), settings = document.querySelector(".dax-settings");
+  if (ahk) { ahk.textContent = ui.ahk; ahk.title = ui.ahkTip; }
+  if (settings) { settings.textContent = ui.settings; settings.title = ui.settingsTip; }
+}
+
+// After Save: the AutoHotkey button, then Settings (the host's dialog).
 function addAhkButton() {
   const save = ribbon.control("save");
   if (!save || document.querySelector(".dax-ahk")) return;
   const b = document.createElement("button");
   b.className = save.className + " dax-ahk";
-  b.textContent = "AHK: date";
-  b.title = "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret";
   b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the document's selection
   b.addEventListener("click", () => insertFromAhk("LegalDate").catch((e) => ribbon.setStatus("AHK: " + e.message)));
-  save.after(b);
+  const s = document.createElement("button");
+  s.className = save.className + " dax-settings";
+  s.addEventListener("mousedown", (e) => e.preventDefault());
+  s.addEventListener("click", () => post({ type: "settingsRequest" }));
+  save.after(b, s);
+  labelButtons();
 }
+
+// --- The view (page or continuous, zoom, comments shown, the rail): restored from the host's settings, and reported
+// to it when it changes, so the next start looks the same. Set through the ribbon's own controls, as a click would.
+const viewParams = new URLSearchParams(location.search);
+const savedView = {
+  paginated: viewParams.has("paginated") ? viewParams.get("paginated") === "1" : null,
+  zoom: viewParams.has("zoom") ? parseFloat(viewParams.get("zoom")) : null,
+  comments: viewParams.has("comments") ? viewParams.get("comments") === "1" : null,
+  rail: viewParams.has("rail") ? viewParams.get("rail") === "1" : null,
+};
+function viewState() {
+  return {
+    paginated: !!ribbon.control("paginated")?.checked,
+    zoom: ribbon.editor?.requestedZoom ?? null,
+    comments: !!ribbon.control("showcomments")?.checked,
+    rail: !!ribbon.control("showrail")?.checked,
+  };
+}
+function setChecked(name, on) {
+  const box = ribbon.control(name);
+  if (!box || on == null || box.checked === on) return;
+  box.checked = on;
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+}
+// After an open: the caret at the start of the document's first paragraph (not a header's or footer's), as Word puts
+// it. The editor inserts tables, pictures, lists and the rest at the caret, and before the document was clicked it has
+// none: the Table grid then closed and inserted nothing.
+function caretAtStart() {
+  const first = Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'))
+    .find((p) => !p.closest(".docx-hf-band, .docx-hf-body, [data-hf-label], .docx-comment-gutter"));
+  if (!first) return;
+  first.focus({ preventScroll: true });
+  const r = document.createRange();
+  r.selectNodeContents(first);
+  r.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+// Before an open: the ribbon's open fails in page view ("Pagination requires staging and container elements attached
+// to their document": it lays the pages out on a surface not yet in the page), so every document opens in continuous
+// view, and applyView afterwards switches to page view if that is where the user was (savedView keeps it).
+function openInContinuousView() {
+  const box = ribbon.control("paginated");
+  if (box) box.checked = false;    // (what the open reads; no event: the view the user chose stays in savedView)
+}
+// The parts that belong to the open document (zoom, comments) are applied again after each open.
+function applyView(v) {
+  setChecked("showrail", v.rail);
+  if (!ribbon.editor) return;
+  if (v.paginated != null && !!ribbon.control("paginated")?.checked !== v.paginated)
+    ribbon.control(v.paginated ? "viewpage" : "viewweb")?.click();
+  setChecked("showcomments", v.comments);
+  if (v.zoom > 0 && Math.abs((ribbon.editor.requestedZoom ?? 1) - v.zoom) > 1e-6) {
+    const select = ribbon.control("zoomlevel") ?? ribbon.control("zoom");
+    if (select) {
+      const value = String(v.zoom);
+      if (!Array.from(select.options).some((o) => o.value === value)) select.add(new Option(`${Math.round(v.zoom * 100)}%`, value));
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+}
+let reportedView = "";
+function reportView() {
+  if (!ribbon?.editor) return;
+  const state = JSON.stringify(viewState());
+  if (state === reportedView) return;
+  reportedView = state;
+  Object.assign(savedView, JSON.parse(state));    // (the next document opens in the view the user has now)
+  post({ type: "view", ...JSON.parse(state) });
+}
+for (const type of ["change", "click"])
+  document.querySelector("#app").addEventListener(type, () => setTimeout(reportView, 0));
 
 host?.addEventListener("message", async (e) => {
   const m = e.data;
@@ -285,11 +514,28 @@ host?.addEventListener("message", async (e) => {
       try { r = await openBytes(fromB64(m.b64), m.name); }
       catch (err) { ribbon.loader.done(); post({ type: "openFailed", error: String(err?.message ?? err) }); return; }
       addAhkButton();
+      applyView(savedView); caretAtStart();
+      reportView();
       post({ type: "opened", ...r });
     } else if (m.type === "blank") {
-      ribbon.openBlank(m.name || "untitled.docx");
-      ribbon.loader.done();
+      openInContinuousView();
+      try { ribbon.openBlank(m.name || "untitled.docx"); }
+      finally { ribbon.loader.done(); }    // (an error must not leave the loading screen up)
       addAhkButton();
+      applyView(savedView); caretAtStart();
+      reportView();
+    } else if (m.type === "captured") {
+      captureWaiters.get(m.name)?.();
+      captureWaiters.delete(m.name);
+    } else if (m.type === "ui") {
+      Object.assign(ui, m);
+      labelButtons();
+    } else if (m.type === "user") {
+      // The name and initials from the Settings dialog: on the comments and changes made from now on.
+      const author = ribbon.control("author");
+      if (author) { author.value = m.name; author.dispatchEvent(new Event("change", { bubbles: true })); }
+      ribbon.initials = m.initials;    // (the ribbon's own: a new name otherwise clears them)
+      ribbon.editor?.setCommentAuthor(m.name, m.initials);
     } else if (m.type === "save") {
       // The host's own save (asking to save before closing, Save As): the bytes go back with its id. It always gets
       // an answer, so a save that fails here doesn't leave it waiting.
@@ -321,6 +567,18 @@ host?.addEventListener("message", async (e) => {
       const t = performance.now();
       const bytes = ribbon.save();
       const saveMs = ms(performance.now() - t);
+      // New and Open while in page view (the document is saved above; these replace it): each opens, in page view.
+      const pageView = [];
+      applyView({ paginated: true });
+      await frame();
+      openInContinuousView();
+      try { ribbon.openBlank("page-view.docx"); applyView(savedView); caretAtStart(); pageView.push(`New ${ribbon.editor && ribbon.control("paginated").checked ? "ok" : "FAILED"}`); }
+      catch (err) { pageView.push(`New FAILED (${err.message})`); }
+      try { await openBytes(bytes, "page-view-open.docx"); applyView(savedView); caretAtStart(); pageView.push(`Open ${ribbon.editor && ribbon.control("paginated").checked ? "ok" : "FAILED"}`); await new Promise((r) => setTimeout(r, 1500)); const overlay = Array.from(document.querySelectorAll("#app *")).find((e) => /^Opening /.test(e.textContent ?? "") && e.children.length < 3 && getComputedStyle(e).visibility !== "hidden" && e.getBoundingClientRect().height > 0); pageView.push(`loading screen ${overlay ? "STILL SHOWN" : "gone"} after 1.5 s`); await capture("measure-open-page-view"); }
+      catch (err) { pageView.push(`Open FAILED (${err.message})`); }
+      post({ type: "log", text: "page view: " + pageView.join(", ") });
+      post({ type: "log", text: "numbering: " + (await numberingChecks()) });
+      post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.
       const bridge = ribbon.exports?.DocxSessionBridge, handle = ribbon.editor?.handle;
       if (bridge?.GetVersion && typeof handle === "number") {
@@ -348,6 +606,7 @@ window.addEventListener("keydown", (e) => {
   else if (ctrl && e.shiftKey && key === "s") message = "saveAsRequest";
   else if (ctrl && !e.shiftKey && key === "n") message = "newRequest";
   else if (ctrl && !e.shiftKey && key === "o") message = "openRequest";
+  else if (ctrl && !e.shiftKey && key === ",") message = "settingsRequest";
   else if (ctrl && !e.shiftKey && key === "s") { e.preventDefault(); ribbon?.download(); return; }
   if (!message) return;
   e.preventDefault();
@@ -382,6 +641,9 @@ const tBoot = performance.now();
 const who = new URLSearchParams(location.search);
 ribbon = mountRibbon("#app", {
   frame: "flush",
+  // (Not paginated: here, even when the last window closed in page view. The ribbon's own open, which New uses, fails
+  // in page view ("Pagination requires staging and container elements attached to their document"): every document
+  // opens in continuous view, and applyView switches to page view once it is in, as the user's click would.)
   ...(who.get("user") ? { commentAuthor: who.get("user"), revisionAuthor: who.get("user"), commentInitials: who.get("initials") ?? "" } : {}),
   typingUndo: "word",    // Undo takes typing back a word at a time, as in Word (the engine answers natively, in ms)
   // Save (the button, Ctrl+S): the host writes the bytes to the document's file (asking where, the first time) and

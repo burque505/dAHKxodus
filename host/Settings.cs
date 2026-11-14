@@ -32,10 +32,28 @@ public static class AppFolders {
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dAHKxodus");
 }
 
-// settings.ini in AppFolders.Roaming: sections and key=value lines, UTF-8, comments (;) kept. Read once, written back
-// whole (through a temporary file) on each change. Earlier versions kept it beside the program: Init moves it.
+// settings.ini in AppFolders.Roaming: sections and key=value lines, UTF-8, comments (;) kept. Read when first needed,
+// and again before each change (another dAHKxodus window may have written it since), then written back whole (through
+// a temporary file). Update(...) makes several changes in one write. Earlier versions kept it beside the program:
+// Init moves it.
+//   [User]    Name, Initials                         (UserIdentity)
+//   [General] Language, RecentMax, OpenLastAtStart, AutosaveMinutes
+//   [Window]  Left, Top, Width, Height, Maximized    (WindowPlacement)
+//   [View]    Paginated, Zoom, Comments, Rail        (the page's view, restored at the next start)
+//   [Recent]  File1, File2, ...                      (RecentFiles)
 public static class Settings {
     static List<string>? lines;
+    static bool batching;
+
+    /// Several changes, read fresh before and written once after.
+    public static void Update(Action changes) {
+        lines = null;
+        batching = true;
+        try { changes(); } finally { batching = false; Save(); }
+    }
+
+    // Before a change: the file as it is now, unless a batch has read it already.
+    static void Fresh() { if (!batching) lines = null; }
 
     public static string FilePath => Path.Combine(AppFolders.Roaming, "settings.ini");
 
@@ -100,7 +118,11 @@ public static class Settings {
     public static int GetInt(string section, string key, int fallback) =>
         int.TryParse(Get(section, key), out var n) ? n : fallback;
 
+    public static bool GetBool(string section, string key, bool fallback) =>
+        Get(section, key) switch { "1" or "true" or "True" => true, "0" or "false" or "False" => false, _ => fallback };
+
     public static void Set(string section, string key, string value) {
+        Fresh();
         var all = Lines;
         var (start, end) = Find(section);
         if (start < 0) {
@@ -132,6 +154,7 @@ public static class Settings {
 
     /// Replaces a section's keys with prefix1=..., prefix2=..., keeping its place in the file.
     public static void SetValues(string section, string prefix, IEnumerable<string> values) {
+        Fresh();
         var all = Lines;
         var body = values.Select((v, i) => $"{prefix}{i + 1}={v}").ToList();
         var (start, end) = Find(section);
@@ -149,6 +172,7 @@ public static class Settings {
     }
 
     static void Save() {
+        if (batching) return;
         try {
             Directory.CreateDirectory(AppFolders.Roaming);
             var tmp = FilePath + ".tmp";
@@ -160,22 +184,57 @@ public static class Settings {
     }
 }
 
-// The documents opened or saved lately, most recent first: settings.ini's [Recent] File1=...
+// The documents opened or saved lately, most recent first: settings.ini's [Recent] File1=... ([General] RecentMax of
+// them, 10 unless set; 0: no list).
 public static class RecentFiles {
-    const int Max = 10;
+    public static int Max => Math.Clamp(Settings.GetInt("General", "RecentMax", 10), 0, 30);
 
-    public static List<string> List() => Settings.Values("Recent");
+    public static List<string> List() => Settings.Values("Recent").Take(Max).ToList();
 
     public static void Add(string path) {
         path = Path.GetFullPath(path);
-        var list = List();
+        var list = Settings.Values("Recent");
         list.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
         list.Insert(0, path);
         Settings.SetValues("Recent", "File", list.Take(Max));
     }
 
     public static void Remove(string path) {
-        var list = List();
+        var list = Settings.Values("Recent");
         if (list.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)) > 0) Settings.SetValues("Recent", "File", list);
+    }
+
+    /// After RecentMax was made smaller: the list loses what it no longer shows.
+    public static void Trim() {
+        var list = Settings.Values("Recent");
+        if (list.Count > Max) Settings.SetValues("Recent", "File", list.Take(Max));
+    }
+}
+
+// The window's place and size, [Window] in settings.ini: restored at the start when it is still on a screen (a
+// monitor may have gone since), saved as the window closes (its normal place, also when it is maximized).
+public static class WindowPlacement {
+    public static void Restore(System.Windows.Forms.Form form) {
+        int w = Settings.GetInt("Window", "Width", 0), h = Settings.GetInt("Window", "Height", 0);
+        if (w < 400 || h < 300) return;
+        var bounds = new System.Drawing.Rectangle(Settings.GetInt("Window", "Left", 0), Settings.GetInt("Window", "Top", 0), w, h);
+        // On a screen: enough of its title bar shows to take hold of it.
+        var titleBar = new System.Drawing.Rectangle(bounds.Left + 40, bounds.Top, Math.Max(bounds.Width - 80, 1), 30);
+        if (System.Windows.Forms.Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(titleBar))) {
+            form.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+            form.Bounds = bounds;
+        } else form.Size = bounds.Size;
+        if (Settings.GetBool("Window", "Maximized", false)) form.WindowState = System.Windows.Forms.FormWindowState.Maximized;
+    }
+
+    public static void Save(System.Windows.Forms.Form form) {
+        var r = form.WindowState == System.Windows.Forms.FormWindowState.Normal ? form.Bounds : form.RestoreBounds;
+        Settings.Update(() => {
+            Settings.Set("Window", "Left", r.Left.ToString());
+            Settings.Set("Window", "Top", r.Top.ToString());
+            Settings.Set("Window", "Width", r.Width.ToString());
+            Settings.Set("Window", "Height", r.Height.ToString());
+            Settings.Set("Window", "Maximized", form.WindowState == System.Windows.Forms.FormWindowState.Maximized ? "1" : "0");
+        });
     }
 }
