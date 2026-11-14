@@ -258,6 +258,25 @@ function capture(name) {
   });
 }
 
+// The File tab, as a click would: the menu opens with the ribbon's commands and the host's (Settings, Close), a
+// picture of it is taken (logs\measure-file-menu.png), and Escape closes it.
+async function fileMenuChecks() {
+  const button = ribbon.control("filebutton"), menu = ribbon.control("filemenu");
+  if (!button || !menu) return "no File tab FAILED";
+  button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  button.click();
+  await frame();
+  const shown = Array.from(menu.querySelectorAll('button[role="menuitem"]'))
+    .filter((b) => b.offsetParent !== null).map((b) => b.querySelector("span")?.textContent ?? "");
+  const opened = menu.hasAttribute("data-open");
+  await capture("measure-file-menu");
+  menu.querySelector("button")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await frame();
+  const want = ["New", "Open…", "Save", "Save As…", ui.settings, ui.close];
+  const ok = opened && want.every((w) => shown.includes(w)) && !menu.hasAttribute("data-open");
+  return `${opened ? "opened" : "NOT opened"}, items ${shown.join(" | ")}, ${menu.hasAttribute("data-open") ? "still open" : "closed by Escape"} ${ok ? "ok" : "FAILED"}`;
+}
+
 // The ribbon's Numbering and Increase indent buttons, as clicks would: three neighbouring paragraphs numbered, the
 // middle one indented. Word shows "1.", "a.", "2." (a nested level steps to the next number format).
 async function numberingChecks() {
@@ -400,18 +419,23 @@ async function unchangedChecks() {
   unchangedResults.push(`unchanged after view changes ${window.dax.isDirty() ? `FAILED (${state()})` : "ok"}`);
 }
 
-// The host's labels for the buttons below, in the user's language (its "ui" message).
+// The host's labels for the AutoHotkey button and its File menu commands, in the user's language (its "ui" message).
 const ui = {
-  settings: "Settings", settingsTip: "dAHKxodus's settings (Ctrl+,)",
+  settings: "Settings", settingsTip: "dAHKxodus's settings (Ctrl+,)", close: "Close", closeTip: "Close dAHKxodus",
   ahk: "AHK: date", ahkTip: "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
 };
+// The host's commands at the foot of the ribbon's File menu (after New, Open, Save, Save As and Recent).
+const hostFileMenu = () => [
+  { id: "settings", label: ui.settings, title: ui.settingsTip, shortcut: "Ctrl+," },
+  { id: "close", label: ui.close, title: ui.closeTip, separatorBefore: true },
+];
 function labelButtons() {
-  const ahk = document.querySelector(".dax-ahk"), settings = document.querySelector(".dax-settings");
+  const ahk = document.querySelector(".dax-ahk");
   if (ahk) { ahk.textContent = ui.ahk; ahk.title = ui.ahkTip; }
-  if (settings) { settings.textContent = ui.settings; settings.title = ui.settingsTip; }
+  ribbon?.setFileMenu(hostFileMenu());
 }
 
-// After Save: the AutoHotkey button, then Settings (the host's dialog).
+// After Save: the AutoHotkey button.
 function addAhkButton() {
   const save = ribbon.control("save");
   if (!save || document.querySelector(".dax-ahk")) return;
@@ -419,11 +443,7 @@ function addAhkButton() {
   b.className = save.className + " dax-ahk";
   b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the document's selection
   b.addEventListener("click", () => insertFromAhk("LegalDate").catch((e) => ribbon.setStatus("AHK: " + e.message)));
-  const s = document.createElement("button");
-  s.className = save.className + " dax-settings";
-  s.addEventListener("mousedown", (e) => e.preventDefault());
-  s.addEventListener("click", () => post({ type: "settingsRequest" }));
-  save.after(b, s);
+  save.after(b);
   labelButtons();
 }
 
@@ -577,6 +597,7 @@ host?.addEventListener("message", async (e) => {
       try { await openBytes(bytes, "page-view-open.docx"); applyView(savedView); caretAtStart(); pageView.push(`Open ${ribbon.editor && ribbon.control("paginated").checked ? "ok" : "FAILED"}`); await new Promise((r) => setTimeout(r, 1500)); const overlay = Array.from(document.querySelectorAll("#app *")).find((e) => /^Opening /.test(e.textContent ?? "") && e.children.length < 3 && getComputedStyle(e).visibility !== "hidden" && e.getBoundingClientRect().height > 0); pageView.push(`loading screen ${overlay ? "STILL SHOWN" : "gone"} after 1.5 s`); await capture("measure-open-page-view"); }
       catch (err) { pageView.push(`Open FAILED (${err.message})`); }
       post({ type: "log", text: "page view: " + pageView.join(", ") });
+      post({ type: "log", text: "file menu: " + (await fileMenuChecks()) });
       post({ type: "log", text: "numbering: " + (await numberingChecks()) });
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.
@@ -656,6 +677,10 @@ ribbon = mountRibbon("#app", {
   onNewRequest: () => post({ type: "newRequest" }),
   onOpenRequest: () => post({ type: "openRequest" }),
   onOpenRecent: (entry) => post({ type: "openRecent", path: entry.id }),
+  // The File menu (the File tab, Alt+F): Save As and the host's commands go to the host.
+  onSaveAsRequest: () => post({ type: "saveAsRequest" }),
+  fileMenu: hostFileMenu(),
+  onFileMenu: (id) => post({ type: id === "settings" ? "settingsRequest" : id === "close" ? "closeRequest" : "fileMenu", id }),
   onOpen: () => ribbon && addAhkButton(),
 });
 // What the host asks before it closes or replaces the document.

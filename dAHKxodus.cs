@@ -173,6 +173,7 @@ class MainForm : Form {
     void SendUi() => Send(new {
         type = "ui", settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
         ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"),
+        close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"),
     });
 
     // ---- Settings
@@ -416,6 +417,9 @@ class MainForm : Form {
                     Log("save failed in the page: " + Str("error"));
                     if (pendingSaves.Remove(failedId, out var failed)) failed.done.TrySetResult(false);
                     MessageBox.Show(this, Lang.T("file.saveFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    break;
+                case "closeRequest":    // File > Close: as the window's own close (asks to save a changed document)
+                    BeginInvoke(Close);
                     break;
                 case "settingsRequest":
                     BeginInvoke(ShowSettings);    // (not inside the page's message: the dialog runs its own loop)
