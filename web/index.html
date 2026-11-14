@@ -12,8 +12,14 @@
 <div id="app"></div>
 <script type="module">
 // dAHKxodus: Docxodus's ribbon editor in a WebView2 host (dAHKxodus.cs).
-// Messages to the host:   ready, opened, saved (bytes for File > Save), ahk (a call to an AutoHotkey function), log
-// Messages from the host: open (a document's bytes), blank (nothing to open), ahkResult, measure (the headless check)
+// Messages to the host:   ready, opened, openFailed, saved (the document's bytes: Save, or the host's "save" with its
+//                         id), dirty (the document changed or was saved), newRequest, openRequest, openRecent (a
+//                         path), saveAsRequest, drop (files dropped on the page, as additional objects), ahk (a call
+//                         to an AutoHotkey function), log
+// Messages from the host: open (a document's bytes), blank (a new document), save (send the bytes back, with the
+//                         id), savedOk (the file is written), recent (the recent documents), ahkResult, measure
+// The host owns the files: New, Open, the Recent list and Save go to it, and it asks to save a changed document
+// before replacing or closing it (window.dax.isDirty()).
 // The loading overlay stays up from the start until the document is in, and a long document mounts window by window
 // (ribbon.openAsync, ribbon-open-async.js), so the overlay keeps moving and shows how far the mount has got.
 // The editing session runs in the host, natively in .NET (nativeSessionBridge): the page's WASM engine starts too but
@@ -228,8 +234,17 @@ async function editChecks() {
   results.push(`picture ${ribbon.editor.insertImage(png) ? "ok" : "FAILED"}`);
   document.activeElement?.blur?.();
   await frame();
+
+  // The host's own save, as before closing a changed document: it asks for the bytes, writes them (a measure run
+  // writes beside its copy) and answers savedOk, after which the document reads as unchanged.
+  results.push(`changed ${window.dax.isDirty() ? "ok" : "FAILED"}`);
+  const savedOk = new Promise((resolve) => { savedOkWaiters.push(resolve); setTimeout(() => resolve(null), 10000); });
+  post({ type: "measureSave" });
+  results.push(`host save ${(await savedOk) ? "ok" : "FAILED"}`);
+  results.push(`unchanged after save ${window.dax.isDirty() ? "FAILED" : "ok"}`);
   return results.join(", ");
 }
+const savedOkWaiters = [];
 
 function addAhkButton() {
   const save = ribbon.control("save");
@@ -251,13 +266,29 @@ host?.addEventListener("message", async (e) => {
       pending.delete(m.id);
       if (p) m.error ? p.reject(new Error(m.error)) : p.resolve(m.result);
     } else if (m.type === "open") {
-      const r = await openBytes(fromB64(m.b64), m.name);
+      let r;
+      try { r = await openBytes(fromB64(m.b64), m.name); }
+      catch (err) { ribbon.loader.done(); post({ type: "openFailed", error: String(err?.message ?? err) }); return; }
       addAhkButton();
       post({ type: "opened", ...r });
     } else if (m.type === "blank") {
-      ribbon.openBlank();
+      ribbon.openBlank(m.name || "untitled.docx");
       ribbon.loader.done();
       addAhkButton();
+    } else if (m.type === "save") {
+      // The host's own save (asking to save before closing, Save As): the bytes go back with its id. It always gets
+      // an answer, so a save that fails here doesn't leave it waiting.
+      let bytes = null, error = "nothing is open";
+      try { bytes = ribbon.save(); } catch (err) { error = String(err?.message ?? err); }
+      post(bytes ? { type: "saved", id: m.id, name: docName, b64: toB64(bytes) } : { type: "saveFailed", id: m.id, error });
+    } else if (m.type === "savedOk") {
+      ribbon.markSaved();
+      savedOkWaiters.splice(0).forEach((resolve) => resolve(m.name));
+      docName = m.name;
+      const label = ribbon.control("docname");
+      if (label) label.textContent = m.name;
+    } else if (m.type === "recent") {
+      ribbon.setRecent(m.entries);
     } else if (m.type === "measure") {
       // Headless check: caret at the end of the first editable block, one AHK call, then save.
       const block = document.querySelector('#app [data-anchor][contenteditable="true"]');
@@ -290,6 +321,40 @@ host?.addEventListener("message", async (e) => {
   }
 });
 
+// Keys a word processor has and the ribbon leaves to its host (the browser's own are off: dAHKxodus.cs). Ctrl+S and
+// Ctrl+O are the ribbon's while the focus is inside it; here they also work when it isn't (nothing focused yet).
+window.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || e.altKey) return;
+  const key = e.key.toLowerCase();
+  const ctrl = e.ctrlKey || e.metaKey;
+  let message = null;
+  if (key === "f12" && !ctrl && !e.shiftKey) message = "saveAsRequest";
+  else if (ctrl && e.shiftKey && key === "s") message = "saveAsRequest";
+  else if (ctrl && !e.shiftKey && key === "n") message = "newRequest";
+  else if (ctrl && !e.shiftKey && key === "o") message = "openRequest";
+  else if (ctrl && !e.shiftKey && key === "s") { e.preventDefault(); ribbon?.download(); return; }
+  if (!message) return;
+  e.preventDefault();
+  post({ type: message });
+});
+
+// A Word document dropped on the window opens in it (the host asks to save the one open first). WebView2 hands the
+// host the dropped File objects, from which it gets their paths. Any other file dropped where the editor doesn't take
+// it must not make the page navigate to it.
+const isWordFile = (f) => /\.(docx|docm)$/i.test(f.name);
+window.addEventListener("dragover", (e) => {
+  if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }
+}, true);
+window.addEventListener("drop", (e) => {
+  const files = Array.from(e.dataTransfer?.files ?? []);
+  if (files.some(isWordFile)) {
+    e.preventDefault();
+    e.stopPropagation();
+    host?.postMessageWithAdditionalObjects?.({ type: "drop" }, files.filter(isWordFile));
+  }
+}, true);
+window.addEventListener("drop", (e) => { if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); });
+
 window.addEventListener("error", (e) => post({ type: "log", text: "error: " + e.message }));
 window.addEventListener("unhandledrejection", (e) => post({ type: "log", text: "rejection: " + (e.reason?.stack || e.reason) }));
 
@@ -303,12 +368,20 @@ ribbon = mountRibbon("#app", {
   frame: "flush",
   ...(who.get("user") ? { commentAuthor: who.get("user"), revisionAuthor: who.get("user"), commentInitials: who.get("initials") ?? "" } : {}),
   typingUndo: "word",    // Undo takes typing back a word at a time, as in Word (the engine answers natively, in ms)
+  // Save (the button, Ctrl+S): the host writes the bytes to the document's file (asking where, the first time) and
+  // answers savedOk, which marks the document saved; a cancelled or failed save leaves it changed.
   onSave: (bytes, name) => {
     if (nativeBridge?.verifyReport) post({ type: "log", text: "verify: " + nativeBridge.verifyReport() });
     post({ type: "saved", name, b64: toB64(bytes) });
   },
+  onDirtyChange: (dirty) => post({ type: "dirty", dirty }),
+  onNewRequest: () => post({ type: "newRequest" }),
+  onOpenRequest: () => post({ type: "openRequest" }),
+  onOpenRecent: (entry) => post({ type: "openRecent", path: entry.id }),
   onOpen: () => ribbon && addAhkButton(),
 });
+// What the host asks before it closes or replaces the document.
+window.dax = { isDirty: () => !!ribbon?.isDirty };
 addOpenAsync(ribbon);
 ribbon.loader.stage(0);
 // The WASM runtime still starts (~200 ms): the session bridge is the host's, but the rest of the exports (the

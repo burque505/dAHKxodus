@@ -8,3 +8,7 @@ tests/**/bin/
 tests/**/obj/
 # your own settings (README: "Your name on comments and changes")
 settings.ini
+# portable mode (a "portable" file beside the program): its settings, recent files and WebView2 profile
+data/
+portable
+portable.txt
