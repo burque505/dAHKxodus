@@ -187,6 +187,50 @@ async function insertFromAhk(fn) {
   return { text, roundTrip: Math.round(roundTrip * 10) / 10 };
 }
 
+// The measure run's checks of milestone 1, through the page as the user's keys and clicks would go (no keys are sent
+// to the desktop): typing undone and redone by Ctrl+Z / Ctrl+Shift+Z, then a comment and a picture, which the saved
+// copy carries (its comment's date and initials, the picture's part in word/media: tests\check-saved.ps1).
+async function editChecks() {
+  const results = [];
+  const editable = () => Array.from(document.querySelectorAll('#app p[data-anchor][contenteditable="true"]'))
+    .filter((p) => !p.closest("table") && p.textContent.trim().length > 0);
+  const caretAtEnd = (el) => {
+    el.focus();
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(r);
+  };
+  const ctrl = (key, shiftKey = false) => document.activeElement?.dispatchEvent(
+    new KeyboardEvent("keydown", { key, ctrlKey: true, shiftKey, bubbles: true, cancelable: true }));
+  const shows = (text) => document.querySelector("#app").textContent.includes(text);
+
+  caretAtEnd(editable()[0]);
+  document.execCommand("insertText", false, " daxtyped");
+  ctrl("z");
+  await frame();
+  results.push(`Ctrl+Z ${shows("daxtyped") ? "FAILED" : "ok"}`);
+  ctrl("z", true);
+  await frame();
+  results.push(`Ctrl+Shift+Z ${shows("daxtyped") ? "ok" : "FAILED"}`);
+  ctrl("z");
+  await frame();
+  ctrl("y");
+  await frame();
+  results.push(`Ctrl+Y ${shows("daxtyped") ? "ok" : "FAILED"}`);
+
+  caretAtEnd(editable()[0]);
+  const comment = ribbon.editor.addComment("A comment from the measure run.");
+  results.push(`comment ${comment ? "ok" : "FAILED"}`);
+  caretAtEnd(editable()[0]);
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  results.push(`picture ${ribbon.editor.insertImage(png) ? "ok" : "FAILED"}`);
+  document.activeElement?.blur?.();
+  await frame();
+  return results.join(", ");
+}
+
 function addAhkButton() {
   const save = ribbon.control("save");
   if (!save || document.querySelector(".dax-ahk")) return;
@@ -226,6 +270,7 @@ host?.addEventListener("message", async (e) => {
       const ahk = await insertFromAhk("LegalDate");
       block.blur(); // the editor commits a text edit on blur
       await frame();
+      post({ type: "log", text: "edit checks: " + (await editChecks()) });
       const t = performance.now();
       const bytes = ribbon.save();
       const saveMs = ms(performance.now() - t);
@@ -251,8 +296,13 @@ window.addEventListener("unhandledrejection", (e) => post({ type: "log", text: "
 // The ribbon is mounted directly (not createRibbonEditor, which fades the overlay out as soon as the engine is up):
 // the overlay then covers the engine's start AND the document's mount, in one go.
 const tBoot = performance.now();
+// Who is editing (dAHKxodus.cs, UserIdentity): the name on comments and tracked changes, and the comments' initials
+// ("" takes them from the name). Without a host (the page opened on its own) the ribbon's defaults apply.
+const who = new URLSearchParams(location.search);
 ribbon = mountRibbon("#app", {
   frame: "flush",
+  ...(who.get("user") ? { commentAuthor: who.get("user"), revisionAuthor: who.get("user"), commentInitials: who.get("initials") ?? "" } : {}),
+  typingUndo: "word",    // Undo takes typing back a word at a time, as in Word (the engine answers natively, in ms)
   onSave: (bytes, name) => {
     if (nativeBridge?.verifyReport) post({ type: "log", text: "verify: " + nativeBridge.verifyReport() });
     post({ type: "saved", name, b64: toB64(bytes) });

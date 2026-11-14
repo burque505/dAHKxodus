@@ -45,8 +45,8 @@ ui.Start();
 return 0;
 
 class MainForm : Form {
-    /// dAHKxodus's version (major.minor.patch): the AutoHotkey side, the installer and the About box read it here.
-    public const string Version = "0.0.1";
+    /// dAHKxodus's version (four parts, the fourth always 0 for the Microsoft Store): the AutoHotkey side, the installer and the About box read it here.
+    public const string Version = "0.0.1.0";
     public static string LogPath = "";
     static readonly DateTime ProcessStart = Process.GetCurrentProcess().StartTime;
 
@@ -113,6 +113,10 @@ class MainForm : Form {
         var engine = Environment.GetEnvironmentVariable("DAHKXODUS_ENGINE");
         if (!string.IsNullOrEmpty(engine)) query.Add("engine=" + Uri.EscapeDataString(engine));
         if (Environment.GetEnvironmentVariable("DAHKXODUS_VERIFY") == "1") query.Add("verify=1");    // (both engines, compared)
+        var (user, initials, from) = UserIdentity.Read(dir);
+        Log($"user \"{user}\"{(initials == "" ? "" : $" ({initials})")} from {from}");
+        query.Add("user=" + Uri.EscapeDataString(user));
+        if (initials != "") query.Add("initials=" + Uri.EscapeDataString(initials));
         cw.Navigate("https://app.example/index.html" + (query.Count == 0 ? "" : "?" + string.Join("&", query)));
     }
 
@@ -244,5 +248,37 @@ public class EngineHost {
         var top = stats.OrderByDescending(kv => kv.Value.ms).Take(6).Select(kv => $"{kv.Key} {kv.Value.n}x {kv.Value.ms:0} ms").ToList();
         stats.Clear();
         return $"engine {total:0} ms; " + string.Join("; ", top);
+    }
+}
+
+// Who is editing: the name and initials the editor stamps on comments and tracked changes. The first that has a name:
+// settings.ini beside the program ([User] Name=, Initials=), then Office's own user information (what Word stamps on
+// the same machine), then the Windows account name. Initials are "" when nothing names them: the editor then takes
+// them from the name, as Word does.
+static class UserIdentity {
+    public static (string Name, string Initials, string From) Read(string dir) {
+        var ini = Path.Combine(dir, "settings.ini");
+        if (File.Exists(ini)) {
+            var name = IniValue(ini, "User", "Name");
+            if (name != "") return (name, IniValue(ini, "User", "Initials"), "settings.ini");
+        }
+        try {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Office\Common\UserInfo");
+            var name = (key?.GetValue("UserName") as string)?.Trim() ?? "";
+            if (name != "") return (name, (key?.GetValue("UserInitials") as string)?.Trim() ?? "", "Office user information");
+        } catch { }
+        return (Environment.UserName, "", "the Windows account");
+    }
+
+    static string IniValue(string path, string section, string key) {
+        var inSection = false;
+        foreach (var raw in File.ReadLines(path)) {
+            var line = raw.Trim();
+            if (line.StartsWith('[') && line.EndsWith(']')) { inSection = line[1..^1].Trim().Equals(section, StringComparison.OrdinalIgnoreCase); continue; }
+            if (!inSection || line.StartsWith(';')) continue;
+            var eq = line.IndexOf('=');
+            if (eq > 0 && line[..eq].Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) return line[(eq + 1)..].Trim();
+        }
+        return "";
     }
 }

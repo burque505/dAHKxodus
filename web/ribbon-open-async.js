@@ -41,6 +41,8 @@ export function addOpenAsync(ribbon) {
       revisionIdentities: this.options.revisionIdentities,
       comments: this.options.comments,
       commentAuthor: this.author,
+      commentInitials: this.initials,
+      typingUndo: this.options.typingUndo,
       windowSize,
       onProgress,
     });

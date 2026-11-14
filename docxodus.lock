@@ -2,8 +2,8 @@
 # To move to a newer fork commit: check it out in the fork's clone, build with -UpdateLock, test, commit this file
 # together with web\package-lock.json.
 repo=https://github.com/burque505/Docxodus
-branch=feat/native-session-bridge
-commit=94b4e6495e010a93a7e2288955d1d04c73c6a3d4
+branch=integration
+commit=776dc195415cae1a041232992790d69fbc395345
 # SHA-256 of web\vendor\docxodus-0.0.0.tgz, the npm package web\package-lock.json was made from. The WASM build is not
 # byte-for-byte repeatable, so a rebuild of the same commit may differ: then npm install changes package-lock.json too.
-npm-sha256=a966b9a471dc0c1ad0df54a3a8d785cc4943f627875aff42864642a164ab26fc
+npm-sha256=d6ebe4e9b614ffbfb1d3824977ac7339888a79895dace3def974a646110e8cd5

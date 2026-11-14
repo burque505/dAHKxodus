@@ -72,8 +72,15 @@ if ($Part -in "all", "npm") {
     if (-not $UpdateLock -and $hash -ne $lock["npm-sha256"]) {
         Write-Warning "The package's hash ($hash) differs from docxodus.lock's; npm install will change web\package-lock.json. If that is expected, rebuild with -UpdateLock."
     }
+    # Install the package just packed, not whatever node_modules holds: a plain "npm install" finds the same name and
+    # version (0.0.0) already there and keeps the old build. Naming the file also brings package-lock.json's integrity
+    # up to date when the package changed (and leaves it alone when it did not).
     Push-Location (Join-Path $PSScriptRoot "web")
-    try { npm install; if ($LASTEXITCODE -ne 0) { throw "npm install failed in web" } } finally { Pop-Location }
+    try {
+        if (Test-Path "node_modules\docxodus") { Remove-Item "node_modules\docxodus" -Recurse -Force }
+        npm install ./vendor/docxodus-0.0.0.tgz
+        if ($LASTEXITCODE -ne 0) { throw "npm install failed in web" }
+    } finally { Pop-Location }
     Write-Host "editor package -> web\vendor, installed in web\node_modules"
     if ($UpdateLock) { $lock["npm-sha256"] = $hash }
 }

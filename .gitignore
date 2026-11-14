@@ -6,3 +6,5 @@ web/node_modules/
 logs/
 tests/**/bin/
 tests/**/obj/
+# your own settings (README: "Your name on comments and changes")
+settings.ini

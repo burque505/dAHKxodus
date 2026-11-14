@@ -92,7 +92,8 @@ var bytes = File.ReadAllBytes(sample);
     C("CloseSession", h);
 }
 
-// 4. An inserted picture is stored as Word stores it: word/media/, with a relative target (finding 5).
+// 4. An inserted picture is stored as Word stores it: in word/media/, never at the package root (finding 5). (Its
+//    relationship target is absolute, "/word/media/imageN.png", as the SDK writes every new relationship; Word reads it.)
 {
     var h = Open(bytes);
     var p = FirstParagraph(h);
@@ -103,9 +104,9 @@ var bytes = File.ReadAllBytes(sample);
     var added = z.Entries.Select(e => e.FullName).Where(n => !before.Contains(n) && n.EndsWith(".png")).ToList();
     Check("picture inserted", added.Count == 1, result.Length > 200 ? result[..200] : result);
     var rels = Entry(z, "word/_rels/document.xml.rels");
-    Check("picture stored in word/media with a relative target",
+    Check("picture stored in word/media, nothing pointing at /media",
         added.Count == 1 && added[0].StartsWith("word/media/") && !rels.Contains("Target=\"/media/"),
-        "stored at " + string.Join(", ", added), knownIssue: "finding 5, milestone 1");
+        "stored at " + string.Join(", ", added));
     C("CloseSession", h);
 }
 
