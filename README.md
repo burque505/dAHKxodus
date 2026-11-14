@@ -33,6 +33,10 @@ You need Windows 10 or 11 (with the WebView2 runtime, which Windows 11 has), [Au
 
 The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the recent documents, Settings and Close (Settings is also a button beside Save). New, Open and Save are also in the title bar, with Ctrl+N, Ctrl+O and Ctrl+S; Save As is F12 or Ctrl+Shift+S. The Recent list beside Open has the documents opened or saved lately, and a Word document dropped on the window opens in it. The title shows `*` while the document has changes not saved, and dAHKxodus asks before closing or replacing it. A save writes a new file beside the old one and then puts it in its place, so a failed save leaves the old file as it was.
 
+### Print and PDF
+
+**File > Print** (Ctrl+P) shows the print dialog, with its preview and printer; **File > Export to PDF** saves the document's pages as a PDF. Both print the page view as it shows (dAHKxodus switches to it at 100% for them, and back after), on paper the size of the document's first page, without the ribbon or the comment cards.
+
 ### Autosave and recovery
 
 While the document has changes not saved, dAHKxodus keeps a recovery copy of it: every 10 minutes (Settings changes this; 0 turns it off) and whenever you switch to another window. The copy is removed when you save the document, open or start another, or close it (saved, or with Don't Save). The document's own file is never written by autosave.

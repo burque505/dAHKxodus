@@ -6,6 +6,23 @@
   html, body { margin: 0; height: 100%; background: #f3f3f3; }
   #app { height: 100vh; }
   .dax-ahk { margin-left: 8px; }
+  /* Printing and PDF (the host's Print and Export to PDF): the document's pages only, one a sheet, as the page view
+     draws them; the page's size comes from preparePrint's @page rule. */
+  @media print {
+    html, body, #app { height: auto !important; overflow: visible !important; background: #fff !important; }
+    #app .dxr { display: block !important; height: auto !important; overflow: visible !important; background: #fff !important; }
+    #app .dxr-chrome, #app .dxr-rail, #app .dxr-hint, #app .dxr-pop, #app [data-dxr="loader"],
+    #app .docx-comment-gutter, #app .docx-comment-leaders, #app [data-docx-comment-panel] { display: none !important; }
+    #app .dxr-scroll { overflow: visible !important; height: auto !important; padding: 0 !important; background: none !important; }
+    #app .dxr-surface, #app .docx-body-flow, #app .page-container {
+      padding: 0 !important; margin: 0 !important; gap: 0 !important; background: none !important; display: block !important;
+      box-shadow: none !important; zoom: 1 !important; transform: none !important;
+    }
+    #app [data-docx-page-comments-row] { display: block !important; width: auto !important; }
+    #app .page-box { box-shadow: none !important; margin: 0 !important; break-after: page; }
+    #app .page-box:last-of-type { break-after: auto; }
+    #app *:focus { outline: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -469,9 +486,48 @@ function relabel() {
   if (hint && ui.hint) hint.innerHTML = ui.hint;    // (the host's own text, from lang\<code>.json)
 }
 
+// --- Printing and PDF: the host asks (preparePrint) and prints this page; the print CSS above shows the pages only.
+// Pages exist in page view only, and are measured at 100%: the view and zoom are set for it, and put back after
+// (printDone from the host, or the browser's afterprint when its print dialog closes).
+let viewBeforePrint = null;
+async function preparePrint(id) {
+  try {
+    if (!ribbon?.editor) throw new Error("nothing is open");
+    if (!viewBeforePrint) viewBeforePrint = viewState();
+    applyView({ paginated: true, zoom: 1 });
+    // (the pages are laid out over a few frames; wait until their count stops changing, at most 3 s)
+    let count = -1, until = performance.now() + 3000;
+    while (performance.now() < until) {
+      await frame();
+      const now = document.querySelectorAll("#app .page-box").length;
+      if (now > 0 && now === count) break;
+      count = now;
+    }
+    const pages = Array.from(document.querySelectorAll("#app .page-box"));
+    if (pages.length === 0) throw new Error("the page view has no pages");
+    const box = pages[0].getBoundingClientRect();
+    const widthIn = Math.round(box.width / 96 * 100) / 100, heightIn = Math.round(box.height / 96 * 100) / 100;
+    let style = document.getElementById("dax-page-size");
+    if (!style) { style = document.createElement("style"); style.id = "dax-page-size"; document.head.append(style); }
+    style.textContent = `@page { size: ${widthIn}in ${heightIn}in; margin: 0; }`;
+    post({ type: "printReady", id, widthIn, heightIn, pages: pages.length });
+  } catch (err) {
+    post({ type: "printReady", id, error: String(err?.message ?? err) });
+  }
+}
+function printDone() {
+  if (!viewBeforePrint) return;
+  const before = viewBeforePrint;
+  viewBeforePrint = null;
+  applyView(before);
+}
+window.addEventListener("afterprint", () => printDone());
+
 // The host's commands at the foot of the ribbon's File menu (after New, Open, Save, Save As and Recent).
 const hostFileMenu = () => [
-  { id: "settings", label: ui.settings, title: ui.settingsTip, shortcut: "Ctrl+," },
+  { id: "print", label: ui.print ?? "Print…", title: ui.printTip ?? "", shortcut: "Ctrl+P", separatorBefore: true },
+  { id: "pdf", label: ui.pdf ?? "Export to PDF…", title: ui.pdfTip ?? "" },
+  { id: "settings", label: ui.settings, title: ui.settingsTip, shortcut: "Ctrl+,", separatorBefore: true },
   { id: "close", label: ui.close, title: ui.closeTip, separatorBefore: true },
 ];
 function labelButtons() {
@@ -594,6 +650,10 @@ host?.addEventListener("message", async (e) => {
       addAhkButton();
       applyView(savedView); caretAtStart(); relabel();
       reportView();
+    } else if (m.type === "preparePrint") {
+      preparePrint(m.id);
+    } else if (m.type === "printDone") {
+      printDone();
     } else if (m.type === "snapshot") {
       snapshot(m.id);
     } else if (m.type === "status") {
@@ -657,6 +717,7 @@ host?.addEventListener("message", async (e) => {
       catch (err) { pageView.push(`Open FAILED (${err.message})`); }
       post({ type: "log", text: "page view: " + pageView.join(", ") });
       post({ type: "log", text: "file menu: " + (await fileMenuChecks()) });
+      post({ type: "log", text: "pdf: " + ((await measureAsk("measurePdf", "pdf")) ? "ok" : "FAILED") });
       post({ type: "log", text: "numbering: " + (await numberingChecks()) });
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.
@@ -687,6 +748,7 @@ window.addEventListener("keydown", (e) => {
   else if (ctrl && !e.shiftKey && key === "n") message = "newRequest";
   else if (ctrl && !e.shiftKey && key === "o") message = "openRequest";
   else if (ctrl && !e.shiftKey && key === ",") message = "settingsRequest";
+  else if (ctrl && !e.shiftKey && key === "p") message = "printRequest";
   else if (ctrl && !e.shiftKey && key === "s") { e.preventDefault(); ribbon?.download(); return; }
   if (!message) return;
   e.preventDefault();
@@ -739,7 +801,7 @@ ribbon = mountRibbon("#app", {
   // The File menu (the File tab, Alt+F): Save As and the host's commands go to the host.
   onSaveAsRequest: () => post({ type: "saveAsRequest" }),
   fileMenu: hostFileMenu(),
-  onFileMenu: (id) => post({ type: id === "settings" ? "settingsRequest" : id === "close" ? "closeRequest" : "fileMenu", id }),
+  onFileMenu: (id) => post({ type: { settings: "settingsRequest", close: "closeRequest", print: "printRequest", pdf: "pdfRequest" }[id] ?? "fileMenu", id }),
   onOpen: () => ribbon && addAhkButton(),
 });
 // What the host asks before it closes or replaces the document.

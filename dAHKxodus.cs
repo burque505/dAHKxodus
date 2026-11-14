@@ -307,6 +307,7 @@ class MainForm : Form {
         type = "ui", settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
         ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"),
         close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"), hint = Lang.T("page.hint"),
+        print = Lang.T("page.print"), printTip = Lang.T("page.printTip"), pdf = Lang.T("page.pdf"), pdfTip = Lang.T("page.pdfTip"),
         ribbon = Lang.Ribbon(),
     });
 
@@ -582,6 +583,19 @@ class MainForm : Form {
                     Log($"measure: recovery copy after the save {(still ? "STILL THERE" : "removed")}");
                     Send(new { type = "measureReply", what = "recoveryState", ok = !still });
                     break;
+                case "printRequest":    // File > Print, Ctrl+P
+                    BeginInvoke(Print);
+                    break;
+                case "pdfRequest":    // File > Export to PDF
+                    BeginInvoke(() => ExportPdf());
+                    break;
+                case "measurePdf":    // (measure runs) a PDF beside the measure copy, no dialog
+                    if (measureOut != "") ExportPdf(Path.ChangeExtension(measureOut, ".pdf"));
+                    break;
+                case "printReady":
+                    var printId = m.TryGetProperty("id", out var pid) && pid.ValueKind == JsonValueKind.Number ? pid.GetInt32() : 0;
+                    if (pendingPrints.Remove(printId, out var printWaiter)) printWaiter.TrySetResult(m.Clone());
+                    break;
                 case "closeRequest":    // File > Close: as the window's own close (asks to save a changed document)
                     BeginInvoke(Close);
                     break;
@@ -643,6 +657,82 @@ class MainForm : Form {
         } catch (Exception ex) {
             Log("message failed: " + ex);
         }
+    }
+
+    // ---- Printing and PDF: the page view's pages, printed by WebView2 (the page's print CSS shows the pages only)
+
+    readonly Dictionary<int, TaskCompletionSource<JsonElement>> pendingPrints = new();
+    int nextPrint;
+
+    // The page switches to page view at 100% and says the pages' size (inches) and count; null when it can't.
+    async Task<(double width, double height, int pages)?> PreparePrintAsync() {
+        var id = ++nextPrint;
+        var done = new TaskCompletionSource<JsonElement>();
+        pendingPrints[id] = done;
+        Send(new { type = "preparePrint", id });
+        var first = await Task.WhenAny(done.Task, Task.Delay(15_000));
+        pendingPrints.Remove(id);
+        if (first != done.Task) { Log("print: the page did not get ready"); return null; }
+        var r = done.Task.Result;
+        if (r.TryGetProperty("error", out var err) && err.GetString() is { Length: > 0 } message) { Log("print: " + message); return null; }
+        return (r.GetProperty("widthIn").GetDouble(), r.GetProperty("heightIn").GetDouble(), r.GetProperty("pages").GetInt32());
+    }
+
+    // File > Print (Ctrl+P): the browser's print dialog, with its preview, printer and pages; the page puts its view
+    // back when the dialog closes (afterprint).
+    async void Print() {
+        if (asking || web.CoreWebView2 == null) return;
+        var size = await PreparePrintAsync();
+        if (size == null) { MessageBox.Show(this, Lang.T("print.failed", DocName), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        Log($"print: {size.Value.pages} pages, {size.Value.width} x {size.Value.height} in");
+        web.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
+    }
+
+    // File > Export to PDF: asks where (the document's name and folder to start), writes the PDF, puts the view back.
+    async void ExportPdf(string? path = null) {
+        if (asking || web.CoreWebView2 == null) return;
+        if (path == null) {
+            asking = true;
+            try {
+                using var dlg = new SaveFileDialog {
+                    Filter = Lang.T("file.filterPdf"), FileName = Path.ChangeExtension(DocName, ".pdf"), OverwritePrompt = true, AddExtension = true,
+                    InitialDirectory = current != "" ? Path.GetDirectoryName(current) : "",
+                };
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                path = dlg.FileName;
+            } finally { asking = false; }
+        }
+        var size = await PreparePrintAsync();
+        var ok = false;
+        try {
+            if (size != null) {
+                var settings = web.CoreWebView2.Environment.CreatePrintSettings();
+                settings.PageWidth = size.Value.width;
+                settings.PageHeight = size.Value.height;
+                settings.MarginTop = settings.MarginBottom = settings.MarginLeft = settings.MarginRight = 0;
+                settings.ShouldPrintBackgrounds = true;
+                settings.ShouldPrintHeaderAndFooter = false;
+                var clock = Stopwatch.StartNew();
+                ok = await web.CoreWebView2.PrintToPdfAsync(path, settings);
+                Log($"pdf: {(ok ? "written" : "FAILED")} {Path.GetFileName(path)} ({(File.Exists(path) ? new FileInfo(path).Length : 0):N0} bytes, {size.Value.pages} pages, {size.Value.width} x {size.Value.height} in, {clock.ElapsedMilliseconds} ms)");
+            }
+        } catch (Exception ex) {
+            Log("pdf failed: " + ex.Message);
+        } finally {
+            Send(new { type = "printDone" });
+        }
+        if (measureOut != "") { MeasurePdf(path, ok, size?.pages ?? 0); return; }
+        if (ok) SendStatus(Lang.T("print.pdfSaved", path));
+        else MessageBox.Show(this, Lang.T("print.pdfFailed", path), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+
+    // (measure runs) The PDF is a PDF, with as many pages as the page view has.
+    void MeasurePdf(string path, bool ok, int pages) {
+        var text = File.Exists(path) ? System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(path)) : "";
+        var inPdf = System.Text.RegularExpressions.Regex.Matches(text, @"/Type\s*/Page[^s]").Count;
+        var good = ok && text.StartsWith("%PDF-") && inPdf == pages && pages > 0;
+        Log($"measure: pdf {(good ? "ok" : "FAILED")} ({inPdf} pages in the PDF, {pages} in the page view)");
+        Send(new { type = "measureReply", what = "pdf", ok = good });
     }
 
     async Task MeasureAutosave() {

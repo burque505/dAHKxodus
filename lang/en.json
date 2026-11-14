@@ -7,6 +7,7 @@
   "file.openFailed": "dAHKxodus could not open {0}:\n\n{1}",
   "file.saveFailed": "dAHKxodus could not save {0}:\n\n{1}",
   "file.askSave": "Do you want to save the changes to {0}?",
+  "file.filterPdf": "PDF (*.pdf)|*.pdf",
 
   "bridge.noAnswer": "AutoHotkey did not answer",
   "bridge.notRunning": "AutoHotkey is not running",
@@ -18,6 +19,10 @@
   "page.close": "Close",
   "page.closeTip": "Close dAHKxodus",
   "page.hint": "Click any paragraph, heading, table cell, footnote, header or footer to edit it. <kbd>Enter</kbd> splits a block, <kbd>Backspace</kbd> at the start merges it into the previous one, <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes. Select text and press <b>New Comment</b> to annotate it. Only the block you changed re-renders — everything else keeps full fidelity, and <b>Save</b> writes a lossless .docx.",
+  "page.print": "Print…",
+  "page.printTip": "Print the document (Ctrl+P)",
+  "page.pdf": "Export to PDF…",
+  "page.pdfTip": "Save the document's pages as a PDF",
 
   "identity.office": "Office user information",
   "identity.windows": "the Windows account",
@@ -45,5 +50,9 @@
   "recovery.hasFile": "Save replaces {0}; Save As keeps both.",
   "recovery.noFile": "Save it to keep it.",
   "recovery.unreadable": "The recovery copy could not be read: {0}",
-  "recovery.notWritten": "The recovery copy could not be written: {0}"
+  "recovery.notWritten": "The recovery copy could not be written: {0}",
+
+  "print.failed": "dAHKxodus could not lay out the pages of {0} for printing.",
+  "print.pdfSaved": "PDF saved: {0}",
+  "print.pdfFailed": "dAHKxodus could not write the PDF {0}."
 }

@@ -7,6 +7,7 @@
   "file.openFailed": "dAHKxodus no pudo abrir {0}:\n\n{1}",
   "file.saveFailed": "dAHKxodus no pudo guardar {0}:\n\n{1}",
   "file.askSave": "¿Desea guardar los cambios en {0}?",
+  "file.filterPdf": "PDF (*.pdf)|*.pdf",
 
   "bridge.noAnswer": "AutoHotkey no respondió",
   "bridge.notRunning": "AutoHotkey no se está ejecutando",
@@ -18,6 +19,10 @@
   "page.close": "Cerrar",
   "page.closeTip": "Cerrar dAHKxodus",
   "page.hint": "Haga clic en un párrafo, título, celda, nota al pie, encabezado o pie de página para editarlo. <kbd>Entrar</kbd> divide un bloque, <kbd>Retroceso</kbd> al principio lo une al anterior, <kbd>Ctrl</kbd>+<kbd>Z</kbd> deshace. Seleccione texto y pulse <b>Nuevo comentario</b> para comentarlo. Solo se vuelve a dibujar el bloque que cambió — todo lo demás conserva su fidelidad, y <b>Guardar</b> escribe un .docx sin pérdidas.",
+  "page.print": "Imprimir…",
+  "page.printTip": "Imprimir el documento (Ctrl+P)",
+  "page.pdf": "Exportar a PDF…",
+  "page.pdfTip": "Guardar las páginas del documento como PDF",
 
   "identity.office": "la información de usuario de Office",
   "identity.windows": "la cuenta de Windows",
@@ -45,5 +50,9 @@
   "recovery.hasFile": "Guardar reemplaza {0}; Guardar como conserva ambos.",
   "recovery.noFile": "Guárdelo para conservarlo.",
   "recovery.unreadable": "No se pudo leer la copia de recuperación: {0}",
-  "recovery.notWritten": "No se pudo escribir la copia de recuperación: {0}"
+  "recovery.notWritten": "No se pudo escribir la copia de recuperación: {0}",
+
+  "print.failed": "dAHKxodus no pudo preparar las páginas de {0} para imprimir.",
+  "print.pdfSaved": "PDF guardado: {0}",
+  "print.pdfFailed": "dAHKxodus no pudo escribir el PDF {0}."
 }
