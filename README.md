@@ -25,12 +25,19 @@ You need Windows 10 or 11 (with the WebView2 runtime, which Windows 11 has), [Au
 
 - `tests\engine`: headless checks of the editing engine (`dotnet run -c Release` in that folder).
 - `AutoHotkey64.exe dAHKxodus.ahk file.docx /measure out.docx`: opens the file, makes one edit through the AutoHotkey bridge, checks Undo and Redo by keyboard, adds a comment and a picture, checks that the document reads as changed, saves it the way the program does before closing (to `out.host.docx`, never over the file opened) and checks that it then reads as unchanged, saves the copy and closes; timings and results go to `logs\dahkxodus.log`. `tests\run-measure.ps1` runs it on a desktop of its own; with `-Exe`, it runs `dAHKxodus.exe` instead.
-- `tests\check-lang.ps1`: checks that each `lang\*.json` has every text of `lang\en.json`, with the same placeholders.
+  The measure run also writes a recovery copy (kept as `out.autosave.docx`) and checks that the save removes it. `-Recovery` starts it as after a crash (a recovery copy left behind, started without a document, the copy recovered); `-RecoveryLater` leaves a copy and starts with the file (the copy must wait); `-Language es` runs it in Spanish.
+- `tests\check-lang.ps1`: checks that each `lang\*.json` has every text of `lang\en.json`, with the same placeholders. `node tests\check-ribbon-lang.mjs` checks the ribbon's tables (`lang\*.ribbon.json`).
 - `tests\check-saved.ps1 out.docx`: checks that copy: the comment's author, initials and date, and the picture stored in `word/media`.
 
 ## Files
 
 The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the recent documents, Settings and Close (Settings is also a button beside Save). New, Open and Save are also in the title bar, with Ctrl+N, Ctrl+O and Ctrl+S; Save As is F12 or Ctrl+Shift+S. The Recent list beside Open has the documents opened or saved lately, and a Word document dropped on the window opens in it. The title shows `*` while the document has changes not saved, and dAHKxodus asks before closing or replacing it. A save writes a new file beside the old one and then puts it in its place, so a failed save leaves the old file as it was.
+
+### Autosave and recovery
+
+While the document has changes not saved, dAHKxodus keeps a recovery copy of it: every 10 minutes (Settings changes this; 0 turns it off) and whenever you switch to another window. The copy is removed when you save the document, open or start another, or close it (saved, or with Don't Save). The document's own file is never written by autosave.
+
+If dAHKxodus ends without closing (a crash, a power cut, Windows restarting), the next start without a document offers the copy: **Yes** recovers it as changes not saved to the document it was (Save replaces that file; Save As keeps both), **No** discards it, **Cancel** decides next time. Started with a document, dAHKxodus says on the status bar that a copy is waiting. Each dAHKxodus window keeps copies of its own, so two windows never take each other's for left behind. The copies are in `%LOCALAPPDATA%\dAHKxodus\Recovery` (portable mode: `data\Recovery`).
 
 ## Settings
 
@@ -39,7 +46,7 @@ The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the rec
 - **Your name on comments and changes**, and your initials (see below).
 - **Language**: English or Spanish, or Automatic (Windows's display language), for the ribbon and dAHKxodus's own dialogs and messages. The ribbon's translations are in `lang\<code>.ribbon.json`, keyed by its English (`tests\check-ribbon-lang.mjs` checks them). Still English: the status bar's running text and the comment cards' buttons.
 - **Recent documents listed:** how many documents the Recent list keeps (0: no list).
-- **Save a recovery copy every … minutes** (used by autosave, which comes next).
+- **Save a recovery copy every … minutes** (see Autosave and recovery; 0: never).
 - **Open the last document when dAHKxodus starts without one.**
 
 dAHKxodus also remembers the window's place and size, and the view (page or continuous, zoom, comments shown, the side rail), and starts with them next time.

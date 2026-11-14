@@ -11,6 +11,7 @@
 #load "host\Settings.cs"
 #load "host\Lang.cs"
 #load "host\SettingsDialog.cs"
+#load "host\Recovery.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
 // args: [0] the AHK script's window (bridge calls go there as WM_COPYDATA), [1] the program folder,
@@ -103,8 +104,31 @@ class MainForm : Form {
     // The page's view as it last reported it ("view"): settings.ini's [View] when the window closes.
     Dictionary<string, string>? view;
 
+    // Autosave (host\Recovery.cs): this window's recovery copy, written every AutosaveMinutes and when the window loses
+    // focus while the document has changes not saved.
+    readonly Recovery recovery;
+    readonly System.Windows.Forms.Timer autosaveTimer = new();
+    readonly Dictionary<int, TaskCompletionSource<byte[]?>> pendingSnapshots = new();
+    int nextSnapshot;
+    bool pageReady, autosaving, autosaveFailed;
+    DateTime lastAutosave = DateTime.MinValue;
+    // A document recovered from a copy left behind: changed (the page counts it unchanged once open) until saved or
+    // replaced; the copy it came from goes once this window has a copy of its own.
+    bool recovered;
+    Recovery.Orphan? recovering;
+    CloseReason closeReason = CloseReason.None;
+
+    // Changes not saved: the page's, or a recovered document's.
+    bool Changed => dirty || recovered;
+
     public MainForm(IntPtr ahk, string dir, string start, string measureOut) {
         Ahk = ahk; this.dir = dir; current = start; this.measureOut = measureOut;
+        // (a measure run's copies go to a folder of its own, never among the user's)
+        recovery = new Recovery(measureOut != "" ? Path.Combine(dir, "logs", "measure-recovery") : Recovery.DefaultFolder);
+        autosaveTimer.Tick += (s, e) => _ = AutosaveAsync();
+        // Leaving the window (another program, a dialog of its own excepted) is a moment to keep the copy current; not
+        // more than twice a minute.
+        Deactivate += (s, e) => { if (!asking && (DateTime.Now - lastAutosave).TotalSeconds >= 30) _ = AutosaveAsync(); };
         Size = new System.Drawing.Size(1400, 950);
         StartPosition = FormStartPosition.CenterScreen;
         Controls.Add(web);
@@ -167,7 +191,116 @@ class MainForm : Form {
     string DocName => current == "" ? Untitled : Path.GetFileName(current);
 
     // "*report.docx - dAHKxodus": the star while the document has changes not saved.
-    void UpdateTitle() => Text = (dirty ? "*" : "") + DocName + " - dAHKxodus";
+    void UpdateTitle() => Text = (Changed ? "*" : "") + DocName + " - dAHKxodus";
+
+    // A line on the ribbon's status bar.
+    void SendStatus(string text) => Send(new { type = "status", text });
+
+    // ---- Autosave and recovery
+
+    /// Writes the recovery copy every AutosaveMinutes ([General], 10 unless set; 0: never) while there are changes.
+    void StartAutosave() {
+        autosaveTimer.Stop();
+        if (measureOut != "") return;    // (a measure run writes its copy when it asks: measureAutosave)
+        var minutes = Math.Clamp(Settings.GetInt("General", "AutosaveMinutes", 10), 0, 120);
+        if (minutes == 0) { ClearRecovery(); return; }
+        autosaveTimer.Interval = minutes * 60_000;
+        autosaveTimer.Start();
+    }
+
+    // The recovery copy: written while there are changes not saved (unless they are the ones written last), removed
+    // once there are none. Returns whether a copy is there now.
+    async Task<bool> AutosaveAsync() {
+        if (autosaving || asking || !pageReady || web.CoreWebView2 == null) return recovery.HasCopy;
+        autosaving = true;
+        try {
+            if (!recovered && !await IsDirtyAsync()) { ClearRecovery(); return false; }
+            var bytes = await SnapshotAsync();
+            if (bytes == null) return recovery.HasCopy;
+            if (recovery.Write(bytes, current, DocName)) Log($"autosave: recovery copy written ({bytes.Length:N0} bytes)");
+            lastAutosave = DateTime.Now;
+            autosaveFailed = false;
+            return true;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Log("autosave failed: " + ex.Message);
+            if (!autosaveFailed) SendStatus("⚠ " + Lang.T("recovery.notWritten", ex.Message));    // (once, not every time)
+            autosaveFailed = true;
+            return recovery.HasCopy;
+        } finally { autosaving = false; }
+    }
+
+    // The document's bytes as Save would write them, without saving: the page answers "snapshot" with the id (null:
+    // it couldn't, or took more than 20 s).
+    async Task<byte[]?> SnapshotAsync() {
+        var id = ++nextSnapshot;
+        var done = new TaskCompletionSource<byte[]?>();
+        pendingSnapshots[id] = done;
+        Send(new { type = "snapshot", id });
+        var first = await Task.WhenAny(done.Task, Task.Delay(20_000));
+        pendingSnapshots.Remove(id);
+        return first == done.Task ? done.Task.Result : null;
+    }
+
+    void ClearRecovery() {
+        try { recovery.Clear(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    // At the start: a copy that a dAHKxodus which didn't close normally left behind is offered, the newest first (one
+    // a start; the others at the next ones). Started with a file, it waits for a start without one.
+    // Returns whether the copy is being recovered (its open is under way).
+    bool OfferRecovery() {
+        List<Recovery.Orphan> orphans;
+        try { orphans = Recovery.Orphans(recovery.Folder); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        if (orphans.Count == 0) return false;
+        var newest = orphans[0];
+        var when = Lang.T("recovery.when", newest.Info.Saved.ToShortTimeString(), newest.Info.Saved.ToShortDateString());
+        Log($"recovery: {orphans.Count} copy(ies) left behind, the newest \"{newest.Info.Name}\" of {newest.Info.Saved:yyyy-MM-dd HH:mm}");
+        if (current != "") {
+            SendStatus(Lang.T("recovery.later", newest.Info.Name, when));
+            return false;
+        }
+        // (DAHKXODUS_RECOVER=yes or no answers for a test run: its window is on a desktop of its own)
+        var auto = Environment.GetEnvironmentVariable("DAHKXODUS_RECOVER");
+        DialogResult answer;
+        if (auto is "yes" or "no") answer = auto == "yes" ? DialogResult.Yes : DialogResult.No;
+        else {
+            var more = orphans.Count > 1 ? "\n\n" + Lang.T("recovery.more", orphans.Count - 1) : "";
+            asking = true;
+            try {
+                answer = MessageBox.Show(this, Lang.T("recovery.offer", newest.Info.Name, when) + more, "dAHKxodus",
+                    MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            } finally { asking = false; }
+        }
+        if (answer == DialogResult.No) { Recovery.Discard(newest); Log("recovery: discarded"); }
+        if (answer != DialogResult.Yes) return false;
+
+        byte[] bytes;
+        try { bytes = Recovery.Read(newest); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Log("recovery: unreadable: " + ex.Message);
+            MessageBox.Show(this, Lang.T("recovery.unreadable", ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        // As changes not saved to the document it was: Save replaces that file, Save As keeps both.
+        current = newest.Info.FileName;
+        recovered = true;
+        recovering = newest;
+        UpdateTitle();
+        Log($"recovery: recovering \"{newest.Info.Name}\" ({bytes.Length:N0} bytes)");
+        Send(new { type = "open", name = newest.Info.Name, b64 = Convert.ToBase64String(bytes) });
+        return true;
+    }
+
+    // The recovered document is open: this window writes a copy of its own, then the one left behind goes.
+    async void RecoveredOpen() {
+        var orphan = recovering!;
+        recovering = null;
+        if (await AutosaveAsync()) Recovery.Discard(orphan);
+        var file = orphan.Info.FileName != "" ? Lang.T("recovery.hasFile", Path.GetFileName(orphan.Info.FileName)) : Lang.T("recovery.noFile");
+        SendStatus(Lang.T("recovery.recovered", orphan.Info.Name, orphan.Info.Saved.ToShortTimeString()) + " " + file);
+        Log($"recovery: recovered \"{orphan.Info.Name}\", title \"{Text}\", copy left behind {(File.Exists(orphan.DocxPath) ? "STILL THERE" : "removed")}");
+    }
 
     // The labels the page adds to the ribbon, in the user's language.
     void SendUi() => Send(new {
@@ -194,11 +327,17 @@ class MainForm : Form {
         SendUi();
         SendRecent();
         var (user, initials, from) = UserIdentity.Read();
-        Log($"settings changed: user \"{user}\" from {from}, language {Lang.Code}, recent {RecentFiles.Max}");
+        Log($"settings changed: user \"{user}\" from {from}, language {Lang.Code}, recent {RecentFiles.Max}, autosave {Settings.GetInt("General", "AutosaveMinutes", 10)} min");
         Send(new { type = "user", name = user, initials });
+        StartAutosave();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e) {
+        autosaveTimer.Stop();
+        // Closed as the user chose (saved, or Don't Save): the copy goes. Closed by Windows shutting down, nobody was
+        // asked: a document with changes keeps its copy, which the next start offers.
+        if (closeReason != CloseReason.WindowsShutDown || !Changed) ClearRecovery();
+        else Log("closed by Windows with changes not saved: the recovery copy stays");
         if (measureOut == "") {
             try {
                 WindowPlacement.Save(this);
@@ -228,7 +367,8 @@ class MainForm : Form {
             return;
         }
         current = Path.GetFullPath(path);
-        dirty = false;
+        dirty = recovered = false;
+        ClearRecovery();    // (the document before it went as the user chose)
         UpdateTitle();
         if (measureOut == "") { RecentFiles.Add(current); SendRecent(); }
         Log($"open {Path.GetFileName(path)} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
@@ -238,7 +378,8 @@ class MainForm : Form {
     async void NewDocument() {
         if (!await CanDiscard()) return;
         current = "";
-        dirty = false;
+        dirty = recovered = false;
+        ClearRecovery();
         UpdateTitle();
         Send(new { type = "blank", name = Untitled });
     }
@@ -259,7 +400,7 @@ class MainForm : Form {
     }
 
     async void OpenPath(string path) {
-        if (current != "" && string.Equals(Path.GetFullPath(path), current, StringComparison.OrdinalIgnoreCase) && !dirty) return;
+        if (current != "" && string.Equals(Path.GetFullPath(path), current, StringComparison.OrdinalIgnoreCase) && !Changed) return;
         if (!await CanDiscard()) return;
         OpenFile(path);
     }
@@ -313,7 +454,8 @@ class MainForm : Form {
         // The page marks the document saved (its ribbon's markSaved) and answers "dirty" false; the title loses its
         // star now, not a message later.
         Send(new { type = "savedOk", name = Path.GetFileName(current) });
-        dirty = false;
+        dirty = recovered = false;
+        ClearRecovery();    // (saved: nothing left to recover)
         UpdateTitle();
         return true;
     }
@@ -350,7 +492,7 @@ class MainForm : Form {
     async Task<bool> CanDiscard() {
         if (measureOut != "" || web.CoreWebView2 == null) return true;
         if (asking) return false;
-        if (!await IsDirtyAsync()) return true;
+        if (!recovered && !await IsDirtyAsync()) return true;
         asking = true;
         DialogResult answer;
         try {
@@ -363,6 +505,7 @@ class MainForm : Form {
     }
 
     protected override async void OnFormClosing(FormClosingEventArgs e) {
+        closeReason = e.CloseReason;
         if (closeConfirmed || measureOut != "" || web.CoreWebView2 == null || e.CloseReason == CloseReason.WindowsShutDown) {
             base.OnFormClosing(e);
             return;
@@ -385,6 +528,10 @@ class MainForm : Form {
                     Log($"editor ready {clock.ElapsedMilliseconds} ms ({Str("engine")} engine; page: {Str("sinceNavigation")} ms since navigation, scripts {Str("scripts")} ms, boot {Str("boot")} ms)");
                     SendUi();
                     if (measureOut == "") SendRecent();
+                    pageReady = true;
+                    StartAutosave();
+                    // A copy left behind by a dAHKxodus that didn't close normally, offered before anything opens.
+                    if (OfferRecovery()) break;
                     // Started without a document: the last one, if the user wants that (and it is still there).
                     if (current == "" && measureOut == "" && Settings.GetBool("General", "OpenLastAtStart", false))
                         current = RecentFiles.List().FirstOrDefault(File.Exists) ?? "";
@@ -393,10 +540,12 @@ class MainForm : Form {
                     break;
                 case "opened":
                     Log($"opened {clock.ElapsedMilliseconds} ms (window {Environment.GetEnvironmentVariable("DAHKXODUS_WINDOW") ?? "default"}; open {Str("open")} ms: first window after {Str("firstWindow")} ms, longest frozen {Str("longestGap")} ms; first paint {Str("paint")} ms, {Str("blocks")} blocks)");
+                    if (recovering != null) RecoveredOpen();
                     if (measureOut != "") Send(new { type = "measure" });
                     break;
                 case "openFailed":
                     Log("open failed in the page: " + Str("error"));
+                    if (recovering != null) { recovering = null; recovered = false; }    // (its copy stays for next time)
                     MessageBox.Show(this, Lang.T("file.openFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     current = "";
                     UpdateTitle();
@@ -418,6 +567,20 @@ class MainForm : Form {
                     Log("save failed in the page: " + Str("error"));
                     if (pendingSaves.Remove(failedId, out var failed)) failed.done.TrySetResult(false);
                     MessageBox.Show(this, Lang.T("file.saveFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    break;
+                case "snapshot":    // the document's bytes for the recovery copy (SnapshotAsync)
+                    var snapId = m.TryGetProperty("id", out var snap) && snap.ValueKind == JsonValueKind.Number ? snap.GetInt32() : 0;
+                    if (Str("error") != "") Log("autosave: the page could not give the document: " + Str("error"));
+                    if (pendingSnapshots.Remove(snapId, out var waiting))
+                        waiting.TrySetResult(Str("b64") is { Length: > 0 } b64 ? Convert.FromBase64String(b64) : null);
+                    break;
+                case "measureAutosave":    // (measure runs) autosave now: is the copy there, as a .docx of the document?
+                    _ = MeasureAutosave();
+                    break;
+                case "measureRecoveryState":    // (measure runs) after the save: the copy must be gone
+                    var still = File.Exists(recovery.DocxPath);
+                    Log($"measure: recovery copy after the save {(still ? "STILL THERE" : "removed")}");
+                    Send(new { type = "measureReply", what = "recoveryState", ok = !still });
                     break;
                 case "closeRequest":    // File > Close: as the window's own close (asks to save a changed document)
                     BeginInvoke(Close);
@@ -480,6 +643,18 @@ class MainForm : Form {
         } catch (Exception ex) {
             Log("message failed: " + ex);
         }
+    }
+
+    async Task MeasureAutosave() {
+        var wrote = await AutosaveAsync();
+        var path = recovery.DocxPath;
+        // (a .docx: a zip whose first entry Word wrote, "PK" first)
+        var docx = File.Exists(path) && File.ReadAllBytes(path) is { Length: > 4 } b && b[0] == (byte)'P' && b[1] == (byte)'K';
+        var info = Path.ChangeExtension(path, ".json");
+        // (kept for tests\check-saved.ps1: the copy must be the document, its comment and picture included)
+        if (docx) File.Copy(path, Path.ChangeExtension(measureOut, ".autosave.docx"), overwrite: true);
+        Log($"measure: autosave {(wrote && docx && File.Exists(info) ? "copy written" : "FAILED")} ({(File.Exists(path) ? new FileInfo(path).Length : 0):N0} bytes, info {(File.Exists(info) ? "there" : "MISSING")})");
+        Send(new { type = "measureReply", what = "autosave", ok = wrote && docx && File.Exists(info) });
     }
 
     async Task CaptureAsync(string name) {

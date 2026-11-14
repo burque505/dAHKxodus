@@ -240,13 +240,45 @@ async function editChecks() {
   // The host's own save, as before closing a changed document: it asks for the bytes, writes them (a measure run
   // writes beside its copy) and answers savedOk, after which the document reads as unchanged.
   results.push(`changed ${window.dax.isDirty() ? "ok" : "FAILED"}`);
+  // Autosave of the changed document: the host's recovery copy is written (a .docx), and the document still reads
+  // as changed (the copy is not a save); after the save below, the copy is gone.
+  results.push(`autosave ${(await measureAsk("measureAutosave", "autosave")) ? "ok" : "FAILED"}`);
+  results.push(`still changed after autosave ${window.dax.isDirty() ? "ok" : "FAILED"}`);
   const savedOk = new Promise((resolve) => { savedOkWaiters.push(resolve); setTimeout(() => resolve(null), 10000); });
   post({ type: "measureSave" });
   results.push(`host save ${(await savedOk) ? "ok" : "FAILED"}`);
   results.push(`unchanged after save ${window.dax.isDirty() ? "FAILED" : "ok"}`);
+  results.push(`recovery copy gone after save ${(await measureAsk("measureRecoveryState", "recoveryState")) ? "ok" : "FAILED"}`);
   return results.join(", ");
 }
 const savedOkWaiters = [];
+
+// (Measure runs) A question to the host, answered by "measureReply" with the same `what`: true, false, or null after
+// 20 s without an answer.
+const measureWaiters = new Map();
+function measureAsk(type, what) {
+  return new Promise((resolve) => {
+    measureWaiters.set(what, resolve);
+    setTimeout(() => { if (measureWaiters.delete(what)) resolve(null); }, 20000);
+    post({ type });
+  });
+}
+
+// --- The recovery copy (the host's autosave): the document's bytes as Save would write them, without saving. Not in
+// the middle of a word: the editor commits typing for them, so this waits until typing has paused (1.5 s, at most
+// 10 s).
+let lastInput = 0;
+document.addEventListener("input", () => { lastInput = performance.now(); }, true);
+async function snapshot(id) {
+  const until = performance.now() + 10000;
+  while (performance.now() - lastInput < 1500 && performance.now() < until) await new Promise((r) => setTimeout(r, 250));
+  try {
+    const bytes = ribbon?.save();
+    post(bytes ? { type: "snapshot", id, b64: toB64(bytes) } : { type: "snapshot", id, error: "nothing is open" });
+  } catch (err) {
+    post({ type: "snapshot", id, error: String(err?.message ?? err) });
+  }
+}
 
 // (Measure runs) The host's picture of the editor as it shows, logs\<name>.png; resolves when it is written.
 const captureWaiters = new Map();
@@ -562,6 +594,14 @@ host?.addEventListener("message", async (e) => {
       addAhkButton();
       applyView(savedView); caretAtStart(); relabel();
       reportView();
+    } else if (m.type === "snapshot") {
+      snapshot(m.id);
+    } else if (m.type === "status") {
+      ribbon.setStatus(m.text);
+    } else if (m.type === "measureReply") {
+      const resolve = measureWaiters.get(m.what);
+      measureWaiters.delete(m.what);
+      resolve?.(!!m.ok);
     } else if (m.type === "captured") {
       captureWaiters.get(m.name)?.();
       captureWaiters.delete(m.name);

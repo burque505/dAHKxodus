@@ -35,5 +35,15 @@
   "settings.autosave": "&Save a recovery copy every (minutes, 0 = never):",
   "settings.folder": "Settings folder",
   "settings.ok": "OK",
-  "settings.cancel": "Cancel"
+  "settings.cancel": "Cancel",
+
+  "recovery.when": "{0} on {1}",
+  "recovery.offer": "dAHKxodus didn't close normally last time. It had saved a recovery copy of \"{0}\" at {1}.\n\nYes: recover it (then save it to keep it).\nNo: discard the recovery copy.\nCancel: decide at the next start.",
+  "recovery.more": "({0} more recovery copies are offered at the next starts.)",
+  "recovery.later": "dAHKxodus didn't close normally last time: start it without a document to recover \"{0}\" (saved at {1}).",
+  "recovery.recovered": "Recovered \"{0}\" as saved at {1}.",
+  "recovery.hasFile": "Save replaces {0}; Save As keeps both.",
+  "recovery.noFile": "Save it to keep it.",
+  "recovery.unreadable": "The recovery copy could not be read: {0}",
+  "recovery.notWritten": "The recovery copy could not be written: {0}"
 }

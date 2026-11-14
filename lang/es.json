@@ -35,5 +35,15 @@
   "settings.autosave": "&Guardar una copia de recuperación cada (minutos, 0 = nunca):",
   "settings.folder": "Carpeta de configuración",
   "settings.ok": "Aceptar",
-  "settings.cancel": "Cancelar"
+  "settings.cancel": "Cancelar",
+
+  "recovery.when": "{0} del {1}",
+  "recovery.offer": "dAHKxodus no se cerró correctamente la última vez. Había guardado una copia de recuperación de \"{0}\" a las {1}.\n\nSí: recuperarla (luego guárdela para conservarla).\nNo: descartar la copia de recuperación.\nCancelar: decidir en el próximo inicio.",
+  "recovery.more": "(Se ofrecerán {0} copias de recuperación más en los próximos inicios.)",
+  "recovery.later": "dAHKxodus no se cerró correctamente la última vez: inícielo sin documento para recuperar \"{0}\" (guardado a las {1}).",
+  "recovery.recovered": "Se recuperó \"{0}\" tal como se guardó a las {1}.",
+  "recovery.hasFile": "Guardar reemplaza {0}; Guardar como conserva ambos.",
+  "recovery.noFile": "Guárdelo para conservarlo.",
+  "recovery.unreadable": "No se pudo leer la copia de recuperación: {0}",
+  "recovery.notWritten": "No se pudo escribir la copia de recuperación: {0}"
 }
