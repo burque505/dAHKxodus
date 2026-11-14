@@ -272,9 +272,12 @@ async function fileMenuChecks() {
   await capture("measure-file-menu");
   menu.querySelector("button")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await frame();
-  const want = ["New", "Open…", "Save", "Save As…", ui.settings, ui.close];
+  // (the ribbon's own items in the language in use: the host's table for the ribbon, or English)
+  const label = (english) => ui.ribbon?.[english] ?? english;
+  const want = [label("New"), label("Open…"), label("Save"), label("Save As…"), ui.settings, ui.close];
   const ok = opened && want.every((w) => shown.includes(w)) && !menu.hasAttribute("data-open");
-  return `${opened ? "opened" : "NOT opened"}, items ${shown.join(" | ")}, ${menu.hasAttribute("data-open") ? "still open" : "closed by Escape"} ${ok ? "ok" : "FAILED"}`;
+  const tabs = Array.from(document.querySelectorAll("#app .dxr-tab:not([hidden])")).map((t) => t.textContent.trim()).join(" | ");
+  return `${opened ? "opened" : "NOT opened"}, items ${shown.join(" | ")}, ${menu.hasAttribute("data-open") ? "still open" : "closed by Escape"} ${ok ? "ok" : "FAILED"}; tabs ${tabs}`;
 }
 
 // The ribbon's Numbering and Increase indent buttons, as clicks would: three neighbouring paragraphs numbered, the
@@ -366,7 +369,7 @@ async function tablePickerChecks() {
     savedView.paginated = paginated;
     openInContinuousView();
     ribbon.openBlank("blank.docx");
-    applyView(savedView); caretAtStart();
+    applyView(savedView); caretAtStart(); relabel();
     await frame();
     window.getSelection().removeAllRanges();
     document.activeElement?.blur?.();
@@ -424,6 +427,16 @@ const ui = {
   settings: "Settings", settingsTip: "dAHKxodus's settings (Ctrl+,)", close: "Close", closeTip: "Close dAHKxodus",
   ahk: "AHK: date", ahkTip: "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
 };
+// The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
+// help line under it, which the host gives whole (a sentence translated word by word would read badly). Again after
+// each open: the ribbon rebuilds some lists then (the styles).
+function relabel() {
+  if (!ribbon) return;
+  ribbon.setLabels(ui.ribbon ?? {});
+  const hint = document.querySelector("#app [data-dxr-hint]");
+  if (hint && ui.hint) hint.innerHTML = ui.hint;    // (the host's own text, from lang\<code>.json)
+}
+
 // The host's commands at the foot of the ribbon's File menu (after New, Open, Save, Save As and Recent).
 const hostFileMenu = () => [
   { id: "settings", label: ui.settings, title: ui.settingsTip, shortcut: "Ctrl+," },
@@ -534,7 +547,7 @@ host?.addEventListener("message", async (e) => {
       try { r = await openBytes(fromB64(m.b64), m.name); }
       catch (err) { ribbon.loader.done(); post({ type: "openFailed", error: String(err?.message ?? err) }); return; }
       addAhkButton();
-      applyView(savedView); caretAtStart();
+      applyView(savedView); caretAtStart(); relabel();
       reportView();
       post({ type: "opened", ...r });
     } else if (m.type === "blank") {
@@ -542,13 +555,14 @@ host?.addEventListener("message", async (e) => {
       try { ribbon.openBlank(m.name || "untitled.docx"); }
       finally { ribbon.loader.done(); }    // (an error must not leave the loading screen up)
       addAhkButton();
-      applyView(savedView); caretAtStart();
+      applyView(savedView); caretAtStart(); relabel();
       reportView();
     } else if (m.type === "captured") {
       captureWaiters.get(m.name)?.();
       captureWaiters.delete(m.name);
     } else if (m.type === "ui") {
       Object.assign(ui, m);
+      relabel();
       labelButtons();
     } else if (m.type === "user") {
       // The name and initials from the Settings dialog: on the comments and changes made from now on.
@@ -592,9 +606,9 @@ host?.addEventListener("message", async (e) => {
       applyView({ paginated: true });
       await frame();
       openInContinuousView();
-      try { ribbon.openBlank("page-view.docx"); applyView(savedView); caretAtStart(); pageView.push(`New ${ribbon.editor && ribbon.control("paginated").checked ? "ok" : "FAILED"}`); }
+      try { ribbon.openBlank("page-view.docx"); applyView(savedView); caretAtStart(); relabel(); pageView.push(`New ${ribbon.editor && ribbon.control("paginated").checked ? "ok" : "FAILED"}`); }
       catch (err) { pageView.push(`New FAILED (${err.message})`); }
-      try { await openBytes(bytes, "page-view-open.docx"); applyView(savedView); caretAtStart(); pageView.push(`Open ${ribbon.editor && ribbon.control("paginated").checked ? "ok" : "FAILED"}`); await new Promise((r) => setTimeout(r, 1500)); const overlay = Array.from(document.querySelectorAll("#app *")).find((e) => /^Opening /.test(e.textContent ?? "") && e.children.length < 3 && getComputedStyle(e).visibility !== "hidden" && e.getBoundingClientRect().height > 0); pageView.push(`loading screen ${overlay ? "STILL SHOWN" : "gone"} after 1.5 s`); await capture("measure-open-page-view"); }
+      try { await openBytes(bytes, "page-view-open.docx"); applyView(savedView); caretAtStart(); relabel(); pageView.push(`Open ${ribbon.editor && ribbon.control("paginated").checked ? "ok" : "FAILED"}`); await new Promise((r) => setTimeout(r, 1500)); const overlay = Array.from(document.querySelectorAll("#app *")).find((e) => /^Opening /.test(e.textContent ?? "") && e.children.length < 3 && getComputedStyle(e).visibility !== "hidden" && e.getBoundingClientRect().height > 0); pageView.push(`loading screen ${overlay ? "STILL SHOWN" : "gone"} after 1.5 s`); await capture("measure-open-page-view"); }
       catch (err) { pageView.push(`Open FAILED (${err.message})`); }
       post({ type: "log", text: "page view: " + pageView.join(", ") });
       post({ type: "log", text: "file menu: " + (await fileMenuChecks()) });

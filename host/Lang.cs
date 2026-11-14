@@ -27,7 +27,9 @@ public static class Lang {
 
     /// settings.ini's [General] Language= ("" or missing: Windows's display language, when there is a file for it).
     public static void Load() {
-        var setting = Settings.Get("General", "Language");
+        // (DAHKXODUS_LANGUAGE wins: a test run in another language, the user's settings untouched)
+        var setting = Environment.GetEnvironmentVariable("DAHKXODUS_LANGUAGE") is { Length: > 0 } forced ? forced
+            : Settings.Get("General", "Language");
         var windows = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
         Code = setting != "" && File.Exists(Path.Combine(Folder, setting + ".json")) ? setting
             : File.Exists(Path.Combine(Folder, windows + ".json")) ? windows : "en";
@@ -40,6 +42,19 @@ public static class Lang {
             return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Combine(Folder, code + ".json"))) ?? new();
         } catch (Exception ex) {
             MainForm.Log($"lang {code}: {ex.Message}");
+            return new();
+        }
+    }
+
+    /// The ribbon's own text in this language: lang\<code>.ribbon.json, keyed by the ribbon's English ({} for English,
+    /// or when there is no such file: the ribbon then stays English).
+    public static Dictionary<string, string> Ribbon() {
+        var path = Path.Combine(Folder, Code + ".ribbon.json");
+        if (Code == "en" || !File.Exists(path)) return new();
+        try {
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) ?? new();
+        } catch (Exception ex) {
+            MainForm.Log($"lang {Code} ribbon: {ex.Message}");
             return new();
         }
     }

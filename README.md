@@ -30,14 +30,14 @@ You need Windows 10 or 11 (with the WebView2 runtime, which Windows 11 has), [Au
 
 ## Files
 
-New, Open and Save are in the title bar, with Ctrl+N, Ctrl+O and Ctrl+S; Save As is F12 or Ctrl+Shift+S. The Recent list beside Open has the documents opened or saved lately, and a Word document dropped on the window opens in it. The title shows `*` while the document has changes not saved, and dAHKxodus asks before closing or replacing it. A save writes a new file beside the old one and then puts it in its place, so a failed save leaves the old file as it was.
+The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the recent documents, Settings and Close. New, Open and Save are also in the title bar, with Ctrl+N, Ctrl+O and Ctrl+S; Save As is F12 or Ctrl+Shift+S. The Recent list beside Open has the documents opened or saved lately, and a Word document dropped on the window opens in it. The title shows `*` while the document has changes not saved, and dAHKxodus asks before closing or replacing it. A save writes a new file beside the old one and then puts it in its place, so a failed save leaves the old file as it was.
 
 ## Settings
 
-The **Settings** button beside Save (or Ctrl+,) opens dAHKxodus's settings:
+**File > Settings** (or Ctrl+,) opens dAHKxodus's settings:
 
 - **Your name on comments and changes**, and your initials (see below).
-- **Language** of dAHKxodus's own dialogs and messages: English or Spanish, or Automatic (Windows's display language). The ribbon's labels are English for now.
+- **Language**: English or Spanish, or Automatic (Windows's display language), for the ribbon and dAHKxodus's own dialogs and messages. The ribbon's translations are in `lang\<code>.ribbon.json`, keyed by its English (`tests\check-ribbon-lang.mjs` checks them). Still English: the status bar's running text and the comment cards' buttons.
 - **Recent documents listed:** how many documents the Recent list keeps (0: no list).
 - **Save a recovery copy every … minutes** (used by autosave, which comes next).
 - **Open the last document when dAHKxodus starts without one.**

@@ -1,5 +1,6 @@
 # Checks lang\*.json against lang\en.json: every file has the same keys, and each text the same {0}-style
-# placeholders as the English one (a translation that drops {1} would lose the error message it shows).
+# placeholders as the English one (a translation that drops {1} would lose the error message it shows). The ribbon's
+# own tables (lang\*.ribbon.json, keyed by its English) have tests\check-ribbon-lang.mjs.
 #   .\tests\check-lang.ps1
 $ErrorActionPreference = "Stop"
 $folder = Join-Path $PSScriptRoot "..\lang"
@@ -7,7 +8,7 @@ $read = { param($path) Get-Content -Raw -Encoding utf8 $path | ConvertFrom-Json 
 $en = & $read (Join-Path $folder "en.json")
 $placeholders = { param($text) ([regex]::Matches($text, "\{\d+\}") | ForEach-Object Value | Sort-Object -Unique) -join " " }
 $failed = 0
-foreach ($file in Get-ChildItem $folder -Filter *.json | Where-Object Name -ne "en.json") {
+foreach ($file in Get-ChildItem $folder -Filter *.json | Where-Object { $_.Name -ne "en.json" -and $_.Name -notlike "*.ribbon.json" }) {
     $other = & $read $file.FullName
     foreach ($key in $en.Keys) {
         if (-not $other.ContainsKey($key)) { Write-Host "FAILED $($file.Name): missing $key"; $failed++; continue }

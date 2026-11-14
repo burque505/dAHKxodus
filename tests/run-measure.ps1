@@ -11,6 +11,7 @@ param(
     [string]$AutoHotkey = "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe",
     [int]$TimeoutSeconds = 150,
     [switch]$Exe,
+    [string]$Language = "",    # (en, es: the run in that language, as DAHKXODUS_LANGUAGE; default: the user's setting)
     [string]$ExePath = (Join-Path $PSScriptRoot "..\vs\publish\dAHKxodus.exe")
 )
 $ErrorActionPreference = "Stop"
@@ -63,6 +64,7 @@ public static class HiddenDesktop {
 }
 "@
 
+$env:DAHKXODUS_LANGUAGE = $Language
 if ($Exe) {
     $ExePath = (Resolve-Path $ExePath).Path
     $env:DAHKXODUS_AUTOHOTKEY = $AutoHotkey    # (inherited: the exe starts its companion with it)

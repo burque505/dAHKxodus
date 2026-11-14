@@ -173,7 +173,8 @@ class MainForm : Form {
     void SendUi() => Send(new {
         type = "ui", settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
         ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"),
-        close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"),
+        close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"), hint = Lang.T("page.hint"),
+        ribbon = Lang.Ribbon(),
     });
 
     // ---- Settings
