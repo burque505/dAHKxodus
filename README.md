@@ -30,7 +30,7 @@ You need Windows 10 or 11 (with the WebView2 runtime, which Windows 11 has), [Au
 
 ## Files
 
-The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the recent documents, Settings and Close. New, Open and Save are also in the title bar, with Ctrl+N, Ctrl+O and Ctrl+S; Save As is F12 or Ctrl+Shift+S. The Recent list beside Open has the documents opened or saved lately, and a Word document dropped on the window opens in it. The title shows `*` while the document has changes not saved, and dAHKxodus asks before closing or replacing it. A save writes a new file beside the old one and then puts it in its place, so a failed save leaves the old file as it was.
+The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the recent documents, Settings and Close (Settings is also a button beside Save). New, Open and Save are also in the title bar, with Ctrl+N, Ctrl+O and Ctrl+S; Save As is F12 or Ctrl+Shift+S. The Recent list beside Open has the documents opened or saved lately, and a Word document dropped on the window opens in it. The title shows `*` while the document has changes not saved, and dAHKxodus asks before closing or replacing it. A save writes a new file beside the old one and then puts it in its place, so a failed save leaves the old file as it was.
 
 ## Settings
 

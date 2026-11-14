@@ -443,12 +443,13 @@ const hostFileMenu = () => [
   { id: "close", label: ui.close, title: ui.closeTip, separatorBefore: true },
 ];
 function labelButtons() {
-  const ahk = document.querySelector(".dax-ahk");
+  const ahk = document.querySelector(".dax-ahk"), settings = document.querySelector(".dax-settings");
   if (ahk) { ahk.textContent = ui.ahk; ahk.title = ui.ahkTip; }
+  if (settings) { settings.textContent = ui.settings; settings.title = ui.settingsTip; }
   ribbon?.setFileMenu(hostFileMenu());
 }
 
-// After Save: the AutoHotkey button.
+// After Save: the AutoHotkey button, then Settings (also in the File menu).
 function addAhkButton() {
   const save = ribbon.control("save");
   if (!save || document.querySelector(".dax-ahk")) return;
@@ -456,7 +457,11 @@ function addAhkButton() {
   b.className = save.className + " dax-ahk";
   b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the document's selection
   b.addEventListener("click", () => insertFromAhk("LegalDate").catch((e) => ribbon.setStatus("AHK: " + e.message)));
-  save.after(b);
+  const s = document.createElement("button");
+  s.className = save.className + " dax-settings";
+  s.addEventListener("mousedown", (e) => e.preventDefault());
+  s.addEventListener("click", () => post({ type: "settingsRequest" }));
+  save.after(b, s);
   labelButtons();
 }
 
