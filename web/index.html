@@ -456,6 +456,37 @@ async function hotkeyChecks() {
   return out.join(", ");
 }
 
+// A new, empty document, the window narrowed as a snap to one side does, the focus gone (as the snap takes it): a
+// click on the page below the one paragraph puts the caret in it, and typing goes there.
+async function emptyResizeChecks(paginated) {
+  openInContinuousView();
+  ribbon.openBlank("empty.docx");
+  applyView({ ...savedView, paginated, zoom: "width" });
+  caretAtStart(); relabel();
+  await frame();
+  await new Promise((resolve) => {
+    measureWaiters.set("resized", resolve);
+    setTimeout(() => { if (measureWaiters.delete("resized")) resolve(null); }, 5000);
+    post({ type: "measureResize", width: 760 });
+  });
+  await new Promise((r) => setTimeout(r, 800));
+  document.activeElement?.blur?.();
+  window.getSelection()?.removeAllRanges();
+  const p = bodyBlocks()[0];
+  const r = p.getBoundingClientRect();
+  const x = r.left + 30, y = r.bottom + 120;
+  const target = document.elementFromPoint(x, y);
+  const down = new MouseEvent("mousedown", { clientX: x, clientY: y, button: 0, detail: 1, bubbles: true, cancelable: true });
+  target?.dispatchEvent(down);
+  const focused = document.activeElement === p && window.getSelection()?.rangeCount === 1;
+  document.execCommand("insertText", false, "typed");
+  await new Promise((r) => setTimeout(r, 400));
+  const text = ribbon.exec("text");
+  post({ type: "measureResize", width: 1400 });
+  await new Promise((r) => setTimeout(r, 500));
+  return `paragraph ${Math.round(r.height)} px high, click below it ${focused ? "ok" : `FAILED (clicked ${target?.tagName}.${target?.className}, focus on ${document.activeElement?.tagName})`}, typing ${text.startsWith("typed") ? "ok" : `FAILED (${JSON.stringify(text)})`}`;
+}
+
 // Event hooks: the host makes tests\hook-check.ahk the BeforeSave and Saved hooks (the measure run's own) and says so
 // (Save then goes through it); Save, as Ctrl+S does, runs BeforeSave (which types a mark at the end), saves, runs
 // Saved. The host checks the order and the saved file; here, the mark is in the document and Save is the page's again.
@@ -1409,9 +1440,11 @@ function setChecked(name, on) {
 // After an open: the caret at the start of the document's first paragraph (not a header's or footer's), as Word puts
 // it. The editor inserts tables, pictures, lists and the rest at the caret, and before the document was clicked it has
 // none: the Table grid then closed and inserted nothing.
+// The document's own paragraphs (not a header's or footer's, nor a comment's), in order.
+const bodyBlocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'))
+  .filter((p) => !p.closest(".docx-hf-band, .docx-hf-body, [data-hf-label], .docx-comment-gutter"));
 function caretAtStart() {
-  const first = Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'))
-    .find((p) => !p.closest(".docx-hf-band, .docx-hf-body, [data-hf-label], .docx-comment-gutter"));
+  const first = bodyBlocks()[0];
   if (!first) return;
   first.focus({ preventScroll: true });
   const r = document.createRange();
@@ -1421,6 +1454,25 @@ function caretAtStart() {
   sel.removeAllRanges();
   sel.addRange(r);
 }
+
+// A click in the empty space below the document's end puts the caret at its end, as in Word. Without it an empty
+// document had one place to click, its one paragraph, which Page width shrinks to a line a few pixels high: once the
+// focus had gone (the window snapped to one side of the screen), a click on the page left no caret, and no way to type.
+document.addEventListener("mousedown", (e) => {
+  if (e.button !== 0 || e.detail > 1 || e.shiftKey || !(e.target instanceof Element)) return;
+  if (!e.target.closest("#app [data-dxr-surface]")) return;
+  if (e.target.closest('[contenteditable="true"], .docx-comment-gutter, .docx-hf-band, .docx-hf-body, [data-hf-label], button, input, select, textarea, a')) return;
+  const last = bodyBlocks().pop();
+  if (!last || e.clientY <= last.getBoundingClientRect().bottom) return;
+  e.preventDefault();
+  last.focus({ preventScroll: true });
+  const r = document.createRange();
+  r.selectNodeContents(last);
+  r.collapse(!last.textContent.trim());    // (an empty paragraph holds a placeholder space: the caret goes before it)
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}, true);
 
 // Before an open: the ribbon's open fails in page view ("Pagination requires staging and container elements attached
 // to their document": it lays the pages out on a surface not yet in the page), so every document opens in continuous
@@ -1566,6 +1618,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "recording: " + (await recordingChecks()) });
       post({ type: "log", text: "hotkeys: " + (await hotkeyChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
+      for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
       // Doc.ahk: tests\doc-check.ahk, a script of its own, drives the editor and logs what it found.
       post({ type: "log", text: "doc api: " + ({ true: "ok", false: "FAILED", null: "FAILED (no answer)" })[await measureAsk("measureDocScript", "docScript", 70000)] });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.

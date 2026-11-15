@@ -176,6 +176,20 @@ class MainForm : Form {
             if (!e.Uri.StartsWith("https://app.example/", StringComparison.OrdinalIgnoreCase)) { e.Cancel = true; Log("navigation refused: " + e.Uri); }
         };
         cw.NewWindowRequested += (s, e) => { e.Handled = true; };
+        // The right-click menu keeps the editing items (cut, copy, paste, spelling, emoji) and loses the browser's:
+        // Refresh and Back would reload the editor and lose the document's changes without asking; Save as, Print,
+        // Inspect and the rest are the page's, not the document's.
+        cw.ContextMenuRequested += (s, e) => {
+            var items = e.MenuItems;
+            for (var i = items.Count - 1; i >= 0; i--)
+                if (BrowserMenuItems.Contains(items[i].Name)) items.RemoveAt(i);
+            // (no separator first, last, or twice running)
+            for (var i = items.Count - 1; i >= 0; i--)
+                if (items[i].Kind == CoreWebView2ContextMenuItemKind.Separator
+                    && (i == 0 || i == items.Count - 1 || items[i - 1].Kind == CoreWebView2ContextMenuItemKind.Separator))
+                    items.RemoveAt(i);
+            if (items.Count == 0) e.Handled = true;    // (nothing left: no empty menu)
+        };
         // The editing session runs here, in .NET, not in the page's WASM runtime: the page calls the engine through
         // this object (chrome.webview.hostObjects.sync.engine). DAHKXODUS_ENGINE=wasm keeps it in the page, to compare.
         cw.AddHostObjectToScript("engine", Engine);
@@ -197,6 +211,14 @@ class MainForm : Form {
             }
         cw.Navigate("https://app.example/index.html" + (query.Count == 0 ? "" : "?" + string.Join("&", query)));
     }
+
+    // The browser's own right-click items (WebView2's names), taken off the menu.
+    static readonly HashSet<string> BrowserMenuItems = new(StringComparer.OrdinalIgnoreCase) {
+        "back", "forward", "reload", "saveAs", "print", "createQrCode", "share", "webCapture", "inspectElement",
+        "openLinkInNewWindow", "saveLinkAs", "copyLinkLocation", "copyLinkToHighlight", "saveImageAs", "copyImageLocation",
+        "openImageInNewWindow", "saveMediaAs", "loop", "showAllControls", "pictureInPicture", "readAloud", "translate",
+        "sendTabToSelf",
+    };
 
     void Send(object message) => web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
 
@@ -691,6 +713,14 @@ class MainForm : Form {
                     break;
                 case "hooksRequest":    // the Macros tab's Event hooks...
                     BeginInvoke(ShowHooks);
+                    break;
+                case "measureResize":    // (measure runs) the window narrower or back, as a snap to one side does
+                    if (measureOut != "") {
+                        var width = m.TryGetProperty("width", out var w) && w.ValueKind == JsonValueKind.Number ? w.GetInt32() : 1400;
+                        Size = new System.Drawing.Size(width, Height);
+                        Log($"measure: window {Width} x {Height}");
+                        Send(new { type = "measureReply", what = "resized", ok = true });
+                    }
                     break;
                 case "measureHooks":    // (measure runs) hooks of its own, then a save as Ctrl+S makes one
                     if (measureOut != "") _ = MeasureHooks();
