@@ -26,6 +26,11 @@
     #app .page-box { box-shadow: none !important; margin: 0 !important; break-after: page; }
     #app .page-box:last-of-type { break-after: auto; }
     #app *:focus { outline: none !important; }
+    /* The scroll area's edge shades are outside the pages' named @page boxes (docxodus-section-N, one a section's
+       size): they made a blank page before the first page and after the last when the sizes differ. */
+    #app .dxr-scroll::before, #app .dxr-scroll::after { display: none !important; content: none !important; }
+    /* The comments don't print (their column is screen-only), so neither do their highlights. */
+    #app span.comment-highlight[data-comment-id] { background: transparent !important; border-bottom-color: transparent !important; }
   }
 </style>
 </head>
@@ -362,8 +367,10 @@ async function ribbonChecks() {
   // (the room the page has: the surface's, less its padding, which leaves the comments their column when they show)
   const surface = document.querySelector("#app [data-dxr-surface]"), cs = getComputedStyle(surface);
   const room = surface.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  const sheet = document.querySelector("#app .page-box") ?? document.querySelector("#app .docx-body-flow");
-  const width = sheet?.getBoundingClientRect().width ?? 0;
+  // (the widest page is the one that fits: a landscape section's, in a portrait document)
+  const sheets = Array.from(document.querySelectorAll("#app .page-box"));
+  if (sheets.length === 0) sheets.push(document.querySelector("#app .docx-body-flow"));
+  const width = Math.max(0, ...sheets.map((e) => e?.getBoundingClientRect().width ?? 0));
   const fits = ribbon.editor.fitsPageWidth && width > room - 40 && width <= room;
   out.push(`Page width: page ${Math.round(width)} px in ${Math.round(room)} px, zoom ${Math.round(ribbon.editor.requestedZoom * 100)}%, `
     + `view says ${JSON.stringify(viewState().zoom)} ${fits && viewState().zoom === "width" ? "ok" : "FAILED"}`);
@@ -559,12 +566,23 @@ async function preparePrint(id) {
     }
     const pages = Array.from(document.querySelectorAll("#app .page-box"));
     if (pages.length === 0) throw new Error("the page view has no pages");
-    const box = pages[0].getBoundingClientRect();
-    const widthIn = Math.round(box.width / 96 * 100) / 100, heightIn = Math.round(box.height / 96 * 100) / 100;
+    // (no caret: the paragraph it is in is washed on screen)
+    document.activeElement?.blur?.();
+    // Each page's size: the page view names each page box after its section (page: docxodus-section-N) with that
+    // section's @page size, so landscape and other sizes print as they show. The first page's is also the default.
+    const sizeOf = (p) => {
+      const w = parseFloat(p.style.width), h = parseFloat(p.style.height);
+      if (/pt$/.test(p.style.width) && /pt$/.test(p.style.height) && w > 0 && h > 0) return { w, h };
+      const r = p.getBoundingClientRect();
+      return { w: r.width * 0.75, h: r.height * 0.75 };
+    };
+    const sizes = pages.map(sizeOf);
+    const widthIn = Math.round(sizes[0].w / 72 * 100) / 100, heightIn = Math.round(sizes[0].h / 72 * 100) / 100;
     let style = document.getElementById("dax-page-size");
     if (!style) { style = document.createElement("style"); style.id = "dax-page-size"; document.head.append(style); }
     style.textContent = `@page { size: ${widthIn}in ${heightIn}in; margin: 0; }`;
-    post({ type: "printReady", id, widthIn, heightIn, pages: pages.length });
+    post({ type: "printReady", id, widthIn, heightIn, pages: pages.length,
+      sizes: sizes.map((s) => `${Math.round(s.w)}x${Math.round(s.h)}`).join(",") });
   } catch (err) {
     post({ type: "printReady", id, error: String(err?.message ?? err) });
   }

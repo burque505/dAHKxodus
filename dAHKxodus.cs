@@ -666,8 +666,9 @@ class MainForm : Form {
     readonly Dictionary<int, TaskCompletionSource<JsonElement>> pendingPrints = new();
     int nextPrint;
 
-    // The page switches to page view at 100% and says the pages' size (inches) and count; null when it can't.
-    async Task<(double width, double height, int pages)?> PreparePrintAsync() {
+    // The page switches to page view at 100% and says the first page's size (inches), the count and every page's size
+    // (points, "612x792,792x612"); null when it can't.
+    async Task<(double width, double height, int pages, string sizes)?> PreparePrintAsync() {
         var id = ++nextPrint;
         var done = new TaskCompletionSource<JsonElement>();
         pendingPrints[id] = done;
@@ -677,7 +678,8 @@ class MainForm : Form {
         if (first != done.Task) { Log("print: the page did not get ready"); return null; }
         var r = done.Task.Result;
         if (r.TryGetProperty("error", out var err) && err.GetString() is { Length: > 0 } message) { Log("print: " + message); return null; }
-        return (r.GetProperty("widthIn").GetDouble(), r.GetProperty("heightIn").GetDouble(), r.GetProperty("pages").GetInt32());
+        return (r.GetProperty("widthIn").GetDouble(), r.GetProperty("heightIn").GetDouble(), r.GetProperty("pages").GetInt32(),
+            r.TryGetProperty("sizes", out var sizes) ? sizes.GetString() ?? "" : "");
     }
 
     // File > Print (Ctrl+P): the browser's print dialog, with its preview, printer and pages; the page puts its view
@@ -708,32 +710,64 @@ class MainForm : Form {
         var ok = false;
         try {
             if (size != null) {
-                var settings = web.CoreWebView2.Environment.CreatePrintSettings();
-                settings.PageWidth = size.Value.width;
-                settings.PageHeight = size.Value.height;
-                settings.MarginTop = settings.MarginBottom = settings.MarginLeft = settings.MarginRight = 0;
-                settings.ShouldPrintBackgrounds = true;
-                settings.ShouldPrintHeaderAndFooter = false;
                 var clock = Stopwatch.StartNew();
-                ok = await web.CoreWebView2.PrintToPdfAsync(path, settings);
-                Log($"pdf: {(ok ? "written" : "FAILED")} {Path.GetFileName(path)} ({(File.Exists(path) ? new FileInfo(path).Length : 0):N0} bytes, {size.Value.pages} pages, {size.Value.width} x {size.Value.height} in, {clock.ElapsedMilliseconds} ms)");
+                var how = "devtools";
+                ok = await PrintPdfDevToolsAsync(path, size.Value.width, size.Value.height);
+                if (!ok) {
+                    // (WebView2's own: one paper size for every page; a landscape page is turned, other sizes are not)
+                    how = "PrintToPdfAsync";
+                    var settings = web.CoreWebView2.Environment.CreatePrintSettings();
+                    settings.PageWidth = size.Value.width;
+                    settings.PageHeight = size.Value.height;
+                    settings.MarginTop = settings.MarginBottom = settings.MarginLeft = settings.MarginRight = 0;
+                    settings.ShouldPrintBackgrounds = true;
+                    settings.ShouldPrintHeaderAndFooter = false;
+                    ok = await web.CoreWebView2.PrintToPdfAsync(path, settings);
+                }
+                Log($"pdf: {(ok ? "written" : "FAILED")} {Path.GetFileName(path)} by {how} ({(File.Exists(path) ? new FileInfo(path).Length : 0):N0} bytes, {size.Value.pages} pages, {size.Value.sizes} pt, {clock.ElapsedMilliseconds} ms)");
             }
         } catch (Exception ex) {
             Log("pdf failed: " + ex.Message);
         } finally {
             Send(new { type = "printDone" });
         }
-        if (measureOut != "") { MeasurePdf(path, ok, size?.pages ?? 0); return; }
+        if (measureOut != "") { MeasurePdf(path, ok, size?.pages ?? 0, size?.sizes ?? ""); return; }
         if (ok) SendStatus(Lang.T("print.pdfSaved", path));
         else MessageBox.Show(this, Lang.T("print.pdfFailed", path), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
-    // (measure runs) The PDF is a PDF, with as many pages as the page view has.
-    void MeasurePdf(string path, bool ok, int pages) {
+    // The PDF through the DevTools protocol (Page.printToPDF), which gives each page the size of its @page box
+    // (preferCSSPageSize): a document with landscape or other-sized sections keeps them. Paper and margins are only
+    // the default, for anything without a size. False (and a log line) when it fails: the caller falls back.
+    async Task<bool> PrintPdfDevToolsAsync(string path, double widthIn, double heightIn) {
+        try {
+            var args = JsonSerializer.Serialize(new {
+                printBackground = true, preferCSSPageSize = true, displayHeaderFooter = false,
+                paperWidth = widthIn, paperHeight = heightIn, marginTop = 0, marginBottom = 0, marginLeft = 0, marginRight = 0,
+            });
+            var json = await web.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.printToPDF", args);
+            using var result = JsonDocument.Parse(json);
+            var bytes = Convert.FromBase64String(result.RootElement.GetProperty("data").GetString() ?? "");
+            if (bytes.Length == 0) return false;
+            var temp = path + ".tmp";
+            File.WriteAllBytes(temp, bytes);
+            File.Move(temp, path, overwrite: true);
+            return true;
+        } catch (Exception ex) {
+            Log("pdf by devtools failed: " + ex.Message);
+            return false;
+        }
+    }
+
+    // (measure runs) The PDF is a PDF, with as many pages as the page view has, each the size of its page there
+    // (points, rounded: the PDF's MediaBoxes in page order).
+    void MeasurePdf(string path, bool ok, int pages, string sizes) {
         var text = File.Exists(path) ? System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(path)) : "";
         var inPdf = System.Text.RegularExpressions.Regex.Matches(text, @"/Type\s*/Page[^s]").Count;
-        var good = ok && text.StartsWith("%PDF-") && inPdf == pages && pages > 0;
-        Log($"measure: pdf {(good ? "ok" : "FAILED")} ({inPdf} pages in the PDF, {pages} in the page view)");
+        var boxes = string.Join(",", System.Text.RegularExpressions.Regex.Matches(text, @"/MediaBox\s*\[\s*[-\d.]+\s+[-\d.]+\s+([-\d.]+)\s+([-\d.]+)\s*\]")
+            .Select(b => $"{Math.Round(double.Parse(b.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))}x{Math.Round(double.Parse(b.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture))}"));
+        var good = ok && text.StartsWith("%PDF-") && inPdf == pages && pages > 0 && boxes == sizes;
+        Log($"measure: pdf {(good ? "ok" : "FAILED")} ({inPdf} pages in the PDF, {pages} in the page view; sizes in the PDF {boxes}, in the page view {sizes})");
         Send(new { type = "measureReply", what = "pdf", ok = good });
     }
 
