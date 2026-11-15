@@ -15,7 +15,7 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   name and initials on changes and comments; comments with their date; pictures stored where Word stores them
 - [x] **2. A desktop program** (0.0.2.0): Open, Save, Save As, recent files, ask to save on close, autosave and
   recovery, settings, print and PDF; the first installer preview, in a full and a light edition
-- [ ] **3. AutoHotkey:** a `Doc` object for scripts, with events; the command palette; macro recording and hotkeys;
+- [x] **3. AutoHotkey** (0.0.3.0): a `Doc` object for scripts, with events; the command palette; macro recording and hotkeys;
   event hooks; your own buttons on the ribbon
 - [ ] **4. Paste and paragraphs:** pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
   dialog (exact indents, tab stops, keep with next...); multilevel lists as in AhkWord (define, change and keep each

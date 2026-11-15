@@ -4,14 +4,14 @@ A word processor for Windows that opens and saves Word documents (.docx) as they
 
 dAHKxodus is the successor of [AhkWord](https://github.com/burque505/AhkWord). It shows [Docxodus](https://github.com/JSv4/Docxodus)'s Word editor in a WebView2 window, and runs Docxodus's editing engine natively in .NET, so a long document opens in a few seconds. AutoHotkey v2 starts it and answers the editor's calls through a bridge. [Csharp-in-AHK](https://github.com/burque505/Csharp-in-AHK) compiles the C# host when it starts.
 
-**Status: 0.0.2.0, a desktop program.** It opens, edits and saves .docx files, with recent files, autosave and recovery, settings (English and Spanish), print and PDF; most of what a word processor needs is still to come. See [ROADMAP.md](ROADMAP.md).
+**Status: 0.0.3.0, AutoHotkey.** It opens, edits and saves .docx files, with recent files, autosave and recovery, settings (English and Spanish), print and PDF; AutoHotkey scripts drive it through a `Doc` object, and it has a command palette, macro recording, macro hotkeys, event hooks and your own ribbon buttons. Most of what a word processor needs is still to come. See [ROADMAP.md](ROADMAP.md).
 
 ## Installing it
 
-Download from the [0.0.2.0 installer preview](https://github.com/burque505/dAHKxodus/releases/tag/installer-0.0.2.0):
+Download from the [0.0.3.0 installer preview](https://github.com/burque505/dAHKxodus/releases/tag/installer-0.0.3.0):
 
-- **Light** (`dAHKxodus-0.0.2.0-light-setup.exe`, 23 MB): uses the AutoHotkey v2 and the .NET 10 Desktop Runtime already on your computer; Setup offers to get them if it doesn't find them.
-- **Full** (`dAHKxodus-0.0.2.0-setup.exe`, 56 MB): everything inside, nothing else to install.
+- **Light** (`dAHKxodus-0.0.3.0-light-setup.exe`, 24 MB): uses the AutoHotkey v2 and the .NET 10 Desktop Runtime already on your computer; Setup offers to get them if it doesn't find them.
+- **Full** (`dAHKxodus-0.0.3.0-setup.exe`, 57 MB): everything inside, nothing else to install.
 - **Portable** (`...-portable.zip`, either edition): unzip and run `dAHKxodus.exe`; nothing is installed.
 
 Both install for your Windows user only, without administrator rights. They aren't signed yet, so Windows warns about them; the release notes say what to do.
@@ -52,6 +52,28 @@ The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the rec
 While the document has changes not saved, dAHKxodus keeps a recovery copy of it: every 10 minutes (Settings changes this; 0 turns it off) and whenever you switch to another window. The copy is removed when you save the document, open or start another, or close it (saved, or with Don't Save). The document's own file is never written by autosave.
 
 If dAHKxodus ends without closing (a crash, a power cut, Windows restarting), the next start without a document offers the copy: **Yes** recovers it as changes not saved to the document it was (Save replaces that file; Save As keeps both), **No** discards it, **Cancel** decides next time. Started with a document, dAHKxodus says on the status bar that a copy is waiting. Each dAHKxodus window keeps copies of its own, so two windows never take each other's for left behind. The copies are in `%LOCALAPPDATA%\dAHKxodus\Recovery` (portable mode: `data\Recovery`).
+
+## AutoHotkey
+
+Any AutoHotkey v2 script can drive a running dAHKxodus through `Doc.ahk` (beside `dAHKxodus.ahk`):
+
+```autohotkey
+#Requires AutoHotkey v2.0
+#Include "Doc.ahk"
+Doc.InsertText("Dear Sir,`n")
+Doc.Bold()
+MsgBox Doc.Text
+Doc.On("Saved", (e) => TrayTip(e.Path, "Saved"))
+```
+
+`Doc.Help()` lists every command. On the **Macros** tab:
+
+- **Macros ▾** runs the macros in the program's `macros` folder and your own (`Macros` beside settings.ini); right-click one of yours to delete it.
+- **Record macro** (Ctrl+Shift+R) records your typing and the commands you run as a new macro, each line a `Doc` call.
+- **Hotkeys…** gives a macro a hotkey, active while dAHKxodus is the active window.
+- **Event hooks…** gives an event (Started, Opened, NewDocument, BeforeSave, Saved, PdfExported, Closing) a macro that dAHKxodus runs by itself; it gets the event in `A_Args[1]` and the file in `A_Args[2]`. BeforeSave and Closing wait for it. The **PDF on save** macro switches itself on as a Saved hook.
+- **Ribbon buttons…** puts macros on the ribbon as buttons of their own, in **My buttons**.
+- **Command palette** (Ctrl+Shift+P) finds any command, macro, style or recent document.
 
 ## Settings
 
