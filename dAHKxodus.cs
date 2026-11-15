@@ -15,6 +15,7 @@
 #load "host\MacroHotkeys.cs"
 #load "host\MacroDialog.cs"
 #load "host\Hooks.cs"
+#load "host\RibbonButtons.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
 // args: [0] the AHK script's window (bridge calls go there as WM_COPYDATA), [1] the program folder,
@@ -137,6 +138,8 @@ class MainForm : Form {
         if (measureOut != "") MacroHotkeys.Override = new(StringComparer.OrdinalIgnoreCase) { ["Insert date.ahk"] = "Ctrl+Alt+J" };
         // (and its event hooks: none, until its check sets some)
         if (measureOut != "") EventHooks.Override = new(StringComparer.OrdinalIgnoreCase);
+        // (and its ribbon button: one for the page's check)
+        if (measureOut != "") RibbonButtons.Override = [new("Insert date.ahk", "Date")];
         autosaveTimer.Tick += (s, e) => _ = AutosaveAsync();
         // Leaving the window (another program, a dialog of its own excepted) is a moment to keep the copy current; not
         // more than twice a minute.
@@ -352,6 +355,8 @@ class MainForm : Form {
         macrosFolder = Lang.T("page.macrosFolder"), macroDeleteTip = Lang.T("page.macroDeleteTip"),
         hotkeys = Lang.T("page.hotkeys"), hotkeysTip = Lang.T("page.hotkeysTip"),
         hooks = Lang.T("page.hooks"), hooksTip = Lang.T("page.hooksTip"),
+        myButtons = Lang.T("page.myButtons"), ribbonButtons = Lang.T("page.ribbonButtons"), ribbonButtonsTip = Lang.T("page.ribbonButtonsTip"),
+        buttonMissing = Lang.T("page.buttonMissing"),
         ribbon = Lang.Ribbon(),
     });
 
@@ -710,6 +715,9 @@ class MainForm : Form {
                     break;
                 case "saveRequest":    // Save (Ctrl+S, the ribbon's) while a BeforeSave hook is set: the hook, then the save
                     _ = SaveAsync(saveAs: false);
+                    break;
+                case "ribbonButtonsRequest":    // the Macros tab's Ribbon buttons...
+                    BeginInvoke(ShowRibbonButtons);
                     break;
                 case "hooksRequest":    // the Macros tab's Event hooks...
                     BeginInvoke(ShowHooks);
@@ -1329,9 +1337,31 @@ class MainForm : Form {
         SendMacros();
     }
 
-    // The macros, with their hotkeys, for the page's Macros list, palette and keys.
+    // The macros, with their hotkeys, for the page's Macros list, palette and keys; and the user's ribbon buttons, each
+    // with its macro (path "": the macro is not there any more).
     void SendMacros() {
-        if (web.CoreWebView2 != null) Send(new { type = "macros", entries = Macros.List(dir) });
+        if (web.CoreWebView2 == null) return;
+        var entries = Macros.List(dir);
+        var buttons = RibbonButtons.All().Select(b => {
+            var m = entries.LastOrDefault(x => string.Equals(Path.GetFileName(x.path), b.Macro, StringComparison.OrdinalIgnoreCase));
+            return new { label = b.Label, macro = b.Macro, path = m?.path ?? "", title = m?.title ?? "", hotkey = m?.hotkey ?? "" };
+        }).ToArray();
+        Send(new { type = "macros", entries, buttons });
+    }
+
+    // The Macros tab's Ribbon buttons...: the user's own buttons, each a macro; OK keeps them.
+    void ShowRibbonButtons() {
+        if (asking || measureOut != "") return;
+        asking = true;
+        try {
+            var files = Macros.List(dir).Select(x => Path.GetFileName(x.path)).Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase).ToList();
+            using var dlg = new RibbonButtonsDialog(files, RibbonButtons.All());
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            RibbonButtons.Save(dlg.Result);
+            Log("ribbon buttons: " + string.Join(", ", RibbonButtons.All().Select(b => $"{b.Label}={b.Macro}")));
+        } finally { asking = false; }
+        SendMacros();
     }
 
     // The Macros tab's Hotkeys...: every macro with its hotkey; OK keeps what the user set.

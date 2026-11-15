@@ -487,6 +487,29 @@ async function emptyResizeChecks(paginated) {
   return `paragraph ${Math.round(r.height)} px high, click below it ${focused ? "ok" : `FAILED (clicked ${target?.tagName}.${target?.className}, focus on ${document.activeElement?.tagName})`}, typing ${text.startsWith("typed") ? "ok" : `FAILED (${JSON.stringify(text)})`}`;
 }
 
+// The user's ribbon buttons: the measure run's own (the host's: "Date" = Insert date.ahk) is on the Macros tab, in My
+// buttons, with Ribbon buttons… beside it; a click types the date; the palette doesn't list it twice.
+async function userButtonChecks() {
+  const out = [];
+  const buttons = Array.from(document.querySelectorAll('.dxr-panel[data-panel="dax-macros"] .dax-usergroup .dax-userbutton'));
+  const date = buttons.find((b) => b.textContent === "Date");
+  out.push(`shown ${date && !date.disabled && buttons.length === 1 ? "ok" : `FAILED (${buttons.map((b) => b.textContent).join(" | ")})`}`);
+  out.push(`customize ${document.querySelector(".dax-usergroup .dax-ribbonbuttons")?.textContent === ui.ribbonButtons ? "ok" : "FAILED"}`);
+  out.push(`palette ${paletteItems().filter((i) => i.name === "Date").length === 0 ? "ok" : "FAILED (listed twice)"}`);
+  openInContinuousView();
+  ribbon.openBlank("button.docx");
+  caretAtStart(); relabel();
+  await frame();
+  ribbon.selectTab("dax-macros");
+  date?.click();
+  const year = String(new Date().getFullYear());
+  const until = performance.now() + 15000;
+  while (performance.now() < until && !ribbon.exec("text").includes(year)) await new Promise((r) => setTimeout(r, 200));
+  out.push(`ran ${ribbon.exec("text").includes(year) ? "ok" : `FAILED (text ${JSON.stringify(ribbon.exec("text"))})`}`);
+  ribbon.selectTab("home");
+  return out.join(", ");
+}
+
 // Event hooks: the host makes tests\hook-check.ahk the BeforeSave and Saved hooks (the measure run's own) and says so
 // (Save then goes through it); Save, as Ctrl+S does, runs BeforeSave (which types a mark at the end), saves, runs
 // Saved. The host checks the order and the saved file; here, the mark is in the document and Save is the page's again.
@@ -769,6 +792,8 @@ const ui = {
   recordMoved: "(here the caret was moved, or text selected: not recorded)", recordSkipped: "({0}: not recorded)",
   macrosFolder: "Open my macros folder", macroDeleteTip: "(right-click to delete it)",
   hotkeys: "Hotkeys…", hotkeysTip: "Give a macro a hotkey: it runs while dAHKxodus is the active window",
+  myButtons: "My buttons", ribbonButtons: "Ribbon buttons…", ribbonButtonsTip: "Put your macros on the ribbon as buttons of their own, here in My buttons",
+  buttonMissing: "(its macro, {0}, is not there)",
   hooks: "Event hooks…", hooksTip: "Macros that run by themselves when something happens: a document opened or saved, a PDF exported, the window closing",
 };
 // The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
@@ -840,6 +865,7 @@ const hostFileMenu = () => [
 // caret, then the scripts in the macros folders (the host lists them each time the list opens: "macros"), which
 // dAHKxodus.ahk starts and which drive the editor through Doc.ahk.
 let macroFiles = [];
+let macroButtons = [];    // (the user's ribbon buttons: [{label, macro, path, title, hotkey}])
 let renderMacroMenu = () => {};    // (addMacrosTab's: draws the open list again)
 const macros = () => [
   { fn: "LegalDate", label: ui.ahk, title: ui.ahkTip },
@@ -910,6 +936,28 @@ function takenShortcuts() {
 function showHotkeys() {
   post({ type: "hotkeysRequest", taken: takenShortcuts() });
 }
+// The user's own ribbon buttons (the Macros tab's My buttons group; the host keeps them: [RibbonButtons]), each
+// running its macro as the Macros list does; one whose macro has gone is greyed out, saying so.
+function renderUserButtons() {
+  const group = document.querySelector(".dax-usergroup");
+  if (!group) return;
+  group.querySelector(".dxr-glabel").textContent = ui.myButtons;
+  const customize = group.querySelector(".dax-ribbonbuttons");
+  customize.textContent = ui.ribbonButtons;
+  customize.title = ui.ribbonButtonsTip;
+  group.querySelector(".dax-userbuttons").replaceChildren(...macroButtons.map((b) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "dax-userbutton";
+    button.textContent = b.label;
+    button.disabled = !b.path;
+    button.title = b.path ? [b.title || b.macro, b.hotkey && `(${b.hotkey})`].filter(Boolean).join(" ") : ui.buttonMissing.replace("{0}", b.macro);
+    button.addEventListener("mousedown", (e) => e.preventDefault());    // (keep the document's selection)
+    button.addEventListener("click", () => runMacro({ path: b.path }));
+    return button;
+  }));
+}
+
 // While a BeforeSave event hook is on (the host says: "hooks"), Save goes through the host, which runs the hook
 // (it may change the document) before it asks for the document's bytes.
 let hooksBeforeSave = false;
@@ -925,6 +973,7 @@ function labelButtons() {
   if (button) { button.textContent = ui.macros + " \u25BE"; button.title = ui.macrosTip; }
   const hotkeys = document.querySelector(".dax-hotkeysbutton");
   if (hotkeys) { hotkeys.textContent = ui.hotkeys; hotkeys.title = ui.hotkeysTip; }
+  renderUserButtons();
   const hooks = document.querySelector(".dax-hooksbutton");
   if (hooks) { hooks.textContent = ui.hooks; hooks.title = ui.hooksTip; }
   showRecording();
@@ -992,8 +1041,13 @@ function addMacrosTab() {
     + '<button type="button" class="dax-recordbutton"></button>'
     + '<button type="button" class="dax-hotkeysbutton"></button>'
     + '<button type="button" class="dax-hooksbutton"></button>'
-    + '<button type="button" class="dax-palettetab"></button></div></div>';
+    + '<button type="button" class="dax-palettetab"></button></div></div>'
+    + '<div class="dxr-group dax-usergroup"><span class="dxr-glabel"></span><div class="dxr-row">'
+    + '<span class="dax-userbuttons"></span><button type="button" class="dax-ribbonbuttons"></button></div></div>';
   viewPanel.after(panel);
+  const customize = panel.querySelector(".dax-ribbonbuttons");
+  customize.addEventListener("mousedown", (e) => e.preventDefault());
+  customize.addEventListener("click", () => post({ type: "ribbonButtonsRequest" }));
   const hotkeysButton = panel.querySelector(".dax-hotkeysbutton");
   hotkeysButton.addEventListener("mousedown", (e) => e.preventDefault());
   hotkeysButton.addEventListener("click", showHotkeys);
@@ -1246,7 +1300,7 @@ function paletteItems() {
         run: () => runControl(el, () => el.click()) });
     } else {
       // (the palette's own buttons; the Macros list, whose macros are listed one by one; the gear, File > Settings)
-      if (el.matches(".dax-palette-button, .dax-palettetab, .dax-macrobutton, .dax-settings, .dax-recmark")) continue;
+      if (el.matches(".dax-palette-button, .dax-palettetab, .dax-macrobutton, .dax-settings, .dax-recmark, .dax-userbutton")) continue;
       const name = controlName(el);
       add({ key: "b:" + (id || name + "@" + placeOf(el)), name, where: placeOf(el), description: squash(el.title), keys: shortcutOf(el),
         on: el.classList.contains("dxr-on") || el.getAttribute("aria-pressed") === "true", off,
@@ -1541,6 +1595,8 @@ host?.addEventListener("message", async (e) => {
       hooksBeforeSave = !!m.beforeSave;
     } else if (m.type === "macros") {
       macroFiles = m.entries ?? [];
+      macroButtons = m.buttons ?? [];
+      renderUserButtons();
       if (document.querySelector(".dax-macromenu[data-open]")) renderMacroMenu();
       palette?.refresh();
     } else if (m.type === "preparePrint") {
@@ -1618,6 +1674,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "recording: " + (await recordingChecks()) });
       post({ type: "log", text: "hotkeys: " + (await hotkeyChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
+      post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
       // Doc.ahk: tests\doc-check.ahk, a script of its own, drives the editor and logs what it found.
       post({ type: "log", text: "doc api: " + ({ true: "ok", false: "FAILED", null: "FAILED (no answer)" })[await measureAsk("measureDocScript", "docScript", 70000)] });
