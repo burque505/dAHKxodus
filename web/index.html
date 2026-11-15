@@ -10,6 +10,30 @@
   #app .dax-settings { font-size: 22px; line-height: 1; padding: 0 6px; }
   /* The Macros tab's list (as AhkWord's macros gallery): under its button, styled as the ribbon's File menu. */
   .dax-macromenu { position: fixed; }
+  /* The command palette (Ctrl+Shift+P): a box at the top, over the editor, in the ribbon's colours. */
+  #app .dax-palette-button { padding: 0 6px; display: inline-flex; align-items: center; }
+  .dax-palette-back { position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, .08); }
+  .dax-palette {
+    position: fixed; top: 72px; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 32px));
+    max-height: calc(100vh - 140px); display: flex; flex-direction: column;
+    background: var(--dxr-chrome, #fff); color: var(--dxr-ink, #1e293b); font: 13px var(--dxr-ui, "Segoe UI", sans-serif);
+    border: 1px solid var(--dxr-rule-strong, #cbd5e1); border-radius: 8px; box-shadow: var(--dxr-shadow-xl, 0 8px 24px rgba(0,0,0,.15));
+  }
+  .dax-palette input {
+    margin: 8px; padding: 8px 10px; font: inherit; font-size: 14px; color: inherit; background: var(--dxr-sheet, #fff);
+    border: 1px solid var(--dxr-rule-strong, #cbd5e1); border-radius: 6px; outline: none;
+  }
+  .dax-palette input:focus { border-color: var(--dxr-accent, #0f766e); }
+  .dax-palette ul { list-style: none; margin: 0; padding: 0 6px 6px; overflow-y: auto; }
+  .dax-palette li { display: flex; gap: 12px; align-items: baseline; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+  .dax-palette li[aria-selected="true"] { background: var(--dxr-wash-on, #ccfbf1); }
+  .dax-palette li .dax-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dax-palette li .dax-state { color: var(--dxr-accent, #0f766e); font-size: 12px; }
+  .dax-palette li .dax-where { color: var(--dxr-muted, #475569); font-size: 12px; white-space: nowrap; }
+  .dax-palette li .dax-keys { color: var(--dxr-faint, #94a3b8); font-size: 12px; white-space: nowrap; }
+  .dax-palette li.dax-off { cursor: default; }
+  .dax-palette li.dax-off .dax-name, .dax-palette li.dax-off .dax-state { color: var(--dxr-faint, #94a3b8); }
+  .dax-palette .dax-empty { padding: 6px 14px 12px; color: var(--dxr-muted, #475569); }
   /* Printing and PDF (the host's Print and Export to PDF): the document's pages only, one a sheet, as the page view
      draws them; the page's size comes from preparePrint's @page rule. */
   @media print {
@@ -346,6 +370,59 @@ async function fileMenuChecks() {
   return `${opened ? "opened" : "NOT opened"}, items ${shown.join(" | ")}, ${menu.hasAttribute("data-open") ? "still open" : "closed by Escape"} ${ok ? "ok" : "FAILED"}; tabs ${tabs}`;
 }
 
+// The command palette, as keys would: Ctrl+Shift+P opens it with the focus in its box; typing finds Bold (named as the
+// ribbon names it, in the language in use) first, at its place on the Home tab; a macro and a list's choice are there;
+// Enter on Page width runs it as its button does and closes the palette; Escape closes it and gives the document its
+// selection back. The view is put back afterwards.
+async function paletteChecks() {
+  const out = [];
+  const before = viewState();
+  const key = (target, k, mods = {}) => target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...mods }));
+  caretAtStart();
+  const block = document.activeElement;
+  key(window, "P", { ctrlKey: true, shiftKey: true });
+  await frame();
+  const box = document.querySelector(".dax-palette");
+  out.push(`opened ${box && palette && document.activeElement === palette.input ? "ok" : "FAILED"}`);
+  if (!box || !palette) return out.join(", ");
+  await new Promise((r) => setTimeout(r, 300));    // (the host's macro list)
+  const type = async (text) => {
+    palette.input.value = text;
+    palette.input.dispatchEvent(new Event("input", { bubbles: true }));
+    await frame();
+    return palette.shown();
+  };
+  const all = await type("");
+  out.push(`${all.length} items ${all.length > 80 ? "ok" : "FAILED"}`);
+  const boldName = controlName(document.querySelector('#app [data-cmd="bold"]'));
+  const bold = await type(boldName.toLowerCase());
+  out.push(`"${boldName.toLowerCase()}" first: ${bold[0]?.name} @ ${bold[0]?.where} ${bold[0]?.key === "b:bold" ? "ok" : "FAILED"}`);
+  const macroItem = all.find((i) => i.key.startsWith("m:") && i.key.endsWith("Insert date.ahk"));
+  out.push(`macro ${macroItem ? `"${macroItem.name}" ok` : "Insert date MISSING FAILED"}`);
+  const marginItem = all.find((i) => i.key.startsWith("s:margins:"));
+  out.push(`list choice ${marginItem ? `"${marginItem.name}" @ ${marginItem.where} ok` : "margins MISSING FAILED"}`);
+  const trackItem = all.find((i) => i.key === "c:trackchanges");
+  out.push(`switch ${trackItem ? `"${trackItem.name}" ${trackItem.on ? "(on)" : "(off)"} ok` : "Track changes MISSING FAILED"}`);
+  const fitName = controlName(ribbon.control("zoomfit"));
+  const fit = await type(fitName);
+  await capture("measure-palette");
+  out.push(`"${fitName}" first ${fit[0]?.key === "b:zoomfit" ? "ok" : `FAILED (${fit[0]?.key})`}`);
+  if (ribbon.editor.fitsPageWidth) ribbon.exec("zoom", { scale: 1 });    // (so the command has something to do)
+  key(palette.input, "Enter");
+  await frame();
+  out.push(`Enter ran it ${!palette && ribbon.editor.fitsPageWidth ? "ok" : "FAILED"}, focus back in the document ${document.activeElement === block ? "ok" : "FAILED"}`);
+  key(window, "P", { ctrlKey: true, shiftKey: true });
+  await frame();
+  await type("zzzz nothing");
+  const none = document.querySelector(".dax-palette .dax-empty")?.textContent;
+  key(palette.input, "Escape");
+  await frame();
+  out.push(`no match says "${none}" ${none === ui.paletteNone ? "ok" : "FAILED"}, Escape closed it ${palette || document.querySelector(".dax-palette") ? "FAILED" : "ok"}`);
+  applyView(before);
+  await frame();
+  return out.join(", ");
+}
+
 // The page's own ribbon parts, as clicks would: no Save in the title bar, Settings' gear there instead; the Macros tab
 // and its list (Escape closes it); Page width makes the page as wide as the window, and the view reports "width".
 async function ribbonChecks() {
@@ -543,7 +620,10 @@ async function unchangedChecks() {
 const ui = {
   settings: "Settings", settingsTip: "dAHKxodus's settings (Ctrl+,)", close: "Close", closeTip: "Close dAHKxodus",
   ahk: "Insert legal date", ahkTip: "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
-  macros: "Macros", macrosTip: "Run an AutoHotkey macro (the methods of class Bridge in dAHKxodus.ahk)",
+  macros: "Macros", macrosTip: "Run an AutoHotkey macro (the scripts in the macros folder; they drive the editor through Doc.ahk)",
+  palette: "Command palette", paletteTip: "Find any command, macro, style or recent document (Ctrl+Shift+P)",
+  palettePlaceholder: "Type a command, macro, style or document…", paletteOn: "on", paletteNotNow: "not now",
+  paletteFile: "File", paletteMacro: "Macro", paletteTitleBar: "Title bar", paletteStatusBar: "Status bar", paletteNone: "Nothing matches",
 };
 // The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
 // help line under it, which the host gives whole (a sentence translated word by word would read badly). Again after
@@ -637,6 +717,11 @@ function labelButtons() {
   if (group) group.textContent = ui.macros;
   const button = document.querySelector(".dax-macrobutton");
   if (button) { button.textContent = ui.macros + " \u25BE"; button.title = ui.macrosTip; }
+  for (const b of document.querySelectorAll(".dax-palette-button, .dax-palettetab")) {
+    b.title = ui.paletteTip;
+    b.setAttribute("aria-label", ui.palette);
+    if (b.classList.contains("dax-palettetab")) b.textContent = ui.palette;
+  }
   ribbon?.setFileMenu(hostFileMenu());
 }
 
@@ -652,6 +737,15 @@ function addAhkButton() {
   s.addEventListener("mousedown", (e) => e.preventDefault());    // (keep the document's selection)
   s.addEventListener("click", () => post({ type: "settingsRequest" }));
   save.after(s);
+  // The command palette: a magnifier beside the gear.
+  const p = document.createElement("button");
+  p.type = "button";
+  p.className = "dxr-icon dax-palette-button";
+  p.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">'
+    + '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>';
+  p.addEventListener("mousedown", (e) => e.preventDefault());
+  p.addEventListener("click", openPalette);
+  s.after(p);
   addMacrosTab();
   labelButtons();
 }
@@ -675,8 +769,12 @@ function addMacrosTab() {
   panel.className = "dxr-panel";
   panel.dataset.panel = "dax-macros";
   panel.innerHTML = '<div class="dxr-group dax-macrogroup"><span class="dxr-glabel"></span><div class="dxr-row">'
-    + '<button type="button" class="dax-macrobutton" aria-haspopup="menu" aria-expanded="false"></button></div></div>';
+    + '<button type="button" class="dax-macrobutton" aria-haspopup="menu" aria-expanded="false"></button>'
+    + '<button type="button" class="dax-palettetab"></button></div></div>';
   viewPanel.after(panel);
+  const paletteButton = panel.querySelector(".dax-palettetab");
+  paletteButton.addEventListener("mousedown", (e) => e.preventDefault());
+  paletteButton.addEventListener("click", openPalette);
 
   const menu = document.createElement("div");
   menu.className = "dxr-pop dxr-filemenu dax-macromenu";
@@ -714,6 +812,239 @@ function addMacrosTab() {
   });
   document.addEventListener("mousedown", (e) => { if (!menu.contains(e.target) && e.target !== button) close(); }, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu.hasAttribute("data-open")) close(); }, true);
+}
+
+// --- The command palette (Ctrl+Shift+P; the magnifier in the title bar; the Macros tab), as AhkWord's: type part of a
+// command's name and press Enter. It lists what the ribbon has, named and placed as the ribbon shows it (in the
+// user's language: the ribbon is already translated), with its shortcut: every button and switch on the tabs, the
+// title bar and the status bar; each choice of the ribbon's lists ("Style: Heading 1", "Margins: Narrow", "Zoom:
+// 75%", the recent documents); the File menu; and the macros. Each runs as a click on it would (the rail, onCommand
+// and so scripts' Command event see it); the document's selection is put back first. A command the ribbon can't run
+// now (a disabled button, the Table tab's outside a table) is greyed out; a switch says whether it is on. With
+// nothing typed, the ones used last come first (kept in this browser profile: a convenience, nothing more).
+const PALETTE_RECENT = "dax.palette.recent";
+function paletteRecent() {
+  try { return JSON.parse(localStorage.getItem(PALETTE_RECENT) ?? "[]"); } catch { return []; }
+}
+function rememberPaletteItem(key) {
+  try { localStorage.setItem(PALETTE_RECENT, JSON.stringify([key, ...paletteRecent().filter((k) => k !== key)].slice(0, 30))); } catch { }
+}
+const squash = (s) => (s ?? "").replace(/\s+/g, " ").trim();
+// A button's own words, icons dropped ("🖹 Page view"); one that is only an icon or a letter ("B", "A▲") is named by
+// its tooltip, without the shortcut or the explanation after a dash ("Bold (Ctrl+B)", "Page view — real page boxes").
+function controlName(el) {
+  const text = squash(el.textContent).replace(/^[^\p{L}\p{N}]+/u, "");
+  const tip = squash(el.title).replace(/\s*\([^)]*\)\s*$/, "").split(" — ")[0];
+  return (text.match(/\p{L}/gu) ?? []).length >= 3 ? text : tip || squash(el.getAttribute("aria-label")) || text;
+}
+const shortcutOf = (el) => /\(((?:Ctrl|Alt|Shift|F\d)[^)]*)\)\s*$/.exec(el.title ?? "")?.[1] ?? "";
+// "Home > Font"; the title bar's and the status bar's controls say so.
+function placeOf(el) {
+  const panel = el.closest(".dxr-panel[data-panel]");
+  if (panel) {
+    const tab = document.querySelector(`#app .dxr-tab[data-tab="${panel.dataset.panel}"]`);
+    return [squash(tab?.textContent), squash(el.closest(".dxr-group")?.querySelector(".dxr-glabel")?.textContent)].filter(Boolean).join(" > ");
+  }
+  return el.closest(".dxr-rail") ? ui.paletteStatusBar : ui.paletteTitleBar;
+}
+// (a contextual tab, Table or Header & Footer, is hidden while the caret is elsewhere: its commands can't run now)
+function inHiddenTab(el) {
+  const panel = el.closest(".dxr-panel[data-panel]");
+  return !!panel && !!document.querySelector(`#app .dxr-tab[data-tab="${panel.dataset.panel}"]`)?.hidden;
+}
+// Runs a ribbon control: its tab comes to the front first (a list or a picker it opens shows under it, and the user
+// sees where it lives).
+function runControl(el, act) {
+  const panel = el.closest(".dxr-panel[data-panel]");
+  if (panel && !panel.hasAttribute("data-active")) ribbon.selectTab(panel.dataset.panel);
+  act();
+}
+
+function paletteItems() {
+  const root = document.querySelector("#app .dxr");
+  if (!root) return [];
+  const items = [], keys = new Set(), names = new Set();
+  const add = (item) => {
+    if (!item.name || keys.has(item.key)) return;
+    keys.add(item.key);
+    names.add(item.name.toLowerCase());
+    items.push(item);
+  };
+  const skip = (el) => !!el.closest('.dxr-pop, [data-dxr="findbar"], [data-dxr="loader"], .dax-palette-back, .dax-macromenu')
+    || el.type === "file" || el.dataset.dxr === "filebutton" || el.dataset.dxr === "save";
+  for (const el of root.querySelectorAll("button, input[type=checkbox]")) {
+    if (skip(el)) continue;
+    const off = el.disabled || el.getAttribute("aria-disabled") === "true" || inHiddenTab(el);
+    const id = el.dataset.dxr ?? el.dataset.cmd ?? el.dataset.list ?? el.dataset.align ?? "";
+    if (el.type === "checkbox") {
+      const name = squash(el.closest("label")?.textContent) || squash(el.title);
+      add({ key: "c:" + (id || name), name, where: placeOf(el), description: squash(el.title), keys: "", on: el.checked, switch: true, off,
+        run: () => runControl(el, () => el.click()) });
+    } else {
+      // (the palette's own buttons; the Macros list, whose macros are listed one by one; the gear, File > Settings)
+      if (el.matches(".dax-palette-button, .dax-palettetab, .dax-macrobutton, .dax-settings")) continue;
+      const name = controlName(el);
+      add({ key: "b:" + (id || name + "@" + placeOf(el)), name, where: placeOf(el), description: squash(el.title), keys: shortcutOf(el),
+        on: el.classList.contains("dxr-on") || el.getAttribute("aria-pressed") === "true", off,
+        run: () => runControl(el, () => el.click()) });
+    }
+  }
+  // The lists' choices. A list that starts with a prompt ("Margins…", value "") resets to it after a choice: it has no
+  // state to show; one without (Zoom) shows its current choice as on. The same list twice (Zoom on the View tab and
+  // in the status bar) is listed once.
+  for (const select of root.querySelectorAll("select")) {
+    if (skip(select)) continue;
+    const options = Array.from(select.options);
+    const prompt = options.find((o) => o.value === "");
+    const label = squash(prompt?.textContent).replace(/^[^\p{L}\p{N}]+/u, "").replace(/[….:]+$/, "")
+      || squash(select.title) || squash(select.getAttribute("aria-label"));
+    const off = select.disabled || inHiddenTab(select);
+    for (const o of options) {
+      if (o.value === "" || o.disabled) continue;
+      const name = `${label}: ${squash(o.textContent)}`;
+      if (names.has(name.toLowerCase())) continue;
+      add({ key: `s:${select.dataset.dxr ?? label}:${o.value}`, name, where: placeOf(select), description: squash(select.title), keys: "",
+        on: !prompt && select.value === o.value, off,
+        run: () => runControl(select, () => { select.value = o.value; select.dispatchEvent(new Event("change", { bubbles: true })); }) });
+    }
+  }
+  // The File menu: the ribbon's own (New, Open, Save, Save As) and the host's (Print, Export to PDF, Settings, Close).
+  for (const b of root.querySelectorAll('[data-dxr="filemenu"] button[role="menuitem"]')) {
+    if (b.closest('[data-dxr="filerecentitems"]')) continue;
+    const spans = b.querySelectorAll("span");
+    const name = squash(spans[0]?.textContent ?? b.textContent);
+    add({ key: "f:" + name, name, where: ui.paletteFile, description: squash(b.title), keys: squash(spans[1]?.textContent),
+      on: false, off: b.disabled, run: () => b.click() });
+  }
+  for (const m of macros())
+    add({ key: "m:" + (m.fn ?? m.path), name: m.label, where: ui.paletteMacro, description: m.title, keys: "", on: false, off: false, run: () => runMacro(m) });
+  return items;
+}
+
+// The items matching what was typed, the best first: every word must be in the item; in its name before its place
+// before its description; at a word's start before inside one; an exact name first of all. Then the ones used last,
+// then by name. Accents and case don't count ("titulo" finds "Título").
+const fold = (s) => (s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+function matchPalette(items, typed, recent) {
+  const words = fold(typed).split(/\s+/).filter(Boolean);
+  const whole = fold(typed).trim();
+  const rank = new Map(recent.map((k, i) => [k, i]));
+  const found = [];
+  for (const item of items) {
+    const name = fold(item.name), where = fold(item.where), description = fold(item.description);
+    let score = name === whole && whole !== "" ? -1 : 0, all = true;
+    for (const w of words) {
+      const at = (s) => { const i = s.indexOf(w); return i < 0 ? -1 : i === 0 || /[^\p{L}\p{N}]/u.test(s[i - 1]) ? 0 : 1; };
+      let a;
+      if ((a = at(name)) >= 0) score += a;
+      else if ((a = at(where)) >= 0) score += 2 + a;
+      else if ((a = at(description)) >= 0) score += 4 + a;
+      else { all = false; break; }
+    }
+    if (all) found.push({ item, score, recent: rank.get(item.key) ?? 1e6 });
+  }
+  found.sort((a, b) => a.score - b.score || a.recent - b.recent || Number(a.item.off) - Number(b.item.off) || a.item.name.localeCompare(b.item.name));
+  return found.map((f) => f.item);
+}
+
+let palette = null;
+function openPalette() {
+  if (palette) { palette.input.focus(); return; }
+  post({ type: "listMacros" });    // (the answer, "macros", refreshes the list)
+  // The document's selection and focus, put back when the palette closes (before a command runs on them).
+  const sel = window.getSelection();
+  const saved = { range: sel?.rangeCount ? sel.getRangeAt(0).cloneRange() : null, focus: document.activeElement };
+  const restore = () => {
+    if (saved.focus instanceof HTMLElement && saved.focus.isConnected && saved.focus !== document.body) saved.focus.focus({ preventScroll: true });
+    if (saved.range && saved.range.startContainer.isConnected && saved.range.endContainer.isConnected) {
+      const s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(saved.range);
+    }
+  };
+  const back = document.createElement("div");
+  back.className = "dax-palette-back";
+  const box = document.createElement("div");
+  box.className = "dax-palette";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", ui.palette);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.spellcheck = false;
+  input.placeholder = ui.palettePlaceholder;
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "true");
+  input.setAttribute("aria-controls", "dax-palette-list");
+  const list = document.createElement("ul");
+  list.id = "dax-palette-list";
+  list.setAttribute("role", "listbox");
+  box.append(input, list);
+  back.append(box);
+  (document.querySelector("#app .dxr") ?? document.body).append(back);
+
+  let items = paletteItems(), shown = [], current = 0;
+  const select = (i) => {
+    current = Math.max(0, Math.min(shown.length - 1, i));
+    list.querySelectorAll("li[role=option]").forEach((li, n) => li.setAttribute("aria-selected", String(n === current)));
+    const li = list.children[current];
+    li?.scrollIntoView({ block: "nearest" });
+    if (li?.id) input.setAttribute("aria-activedescendant", li.id);
+  };
+  const render = () => {
+    shown = matchPalette(items, input.value, paletteRecent()).slice(0, 300);
+    list.replaceChildren(...shown.map((item, i) => {
+      const li = document.createElement("li");
+      li.id = "dax-palette-" + i;
+      li.setAttribute("role", "option");
+      li.dataset.key = item.key;
+      if (item.off) { li.classList.add("dax-off"); li.setAttribute("aria-disabled", "true"); }
+      const state = item.off ? ui.paletteNotNow : item.on ? ui.paletteOn : "";
+      li.innerHTML = '<span class="dax-name"></span><span class="dax-state"></span><span class="dax-where"></span><span class="dax-keys"></span>';
+      li.children[0].textContent = item.name;
+      li.children[0].title = item.description || item.name;
+      li.children[1].textContent = state ? `(${state})` : "";
+      li.children[2].textContent = item.where;
+      li.children[3].textContent = item.keys;
+      li.addEventListener("mousedown", (e) => e.preventDefault());
+      li.addEventListener("mousemove", () => { if (current !== i) select(i); });
+      li.addEventListener("click", () => run(item));
+      return li;
+    }));
+    if (shown.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "dax-empty";
+      empty.textContent = ui.paletteNone;
+      list.append(empty);
+    }
+    select(0);
+  };
+  const close = () => {
+    back.remove();
+    palette = null;
+    restore();
+  };
+  const run = (item) => {
+    if (!item || item.off) return;
+    close();
+    rememberPaletteItem(item.key);
+    try { item.run(); } catch (err) { ribbon.setStatus(`${item.name}: ${err?.message ?? err}`); }
+  };
+  input.addEventListener("input", render);
+  input.addEventListener("keydown", (e) => {
+    const page = Math.max(1, Math.floor(list.clientHeight / (list.children[0]?.offsetHeight || 28)) - 1);
+    const moves = { ArrowDown: current + 1, ArrowUp: current - 1, PageDown: current + page, PageUp: current - page };
+    if (e.key in moves) select(moves[e.key]);
+    else if (e.key === "Enter") run(shown[current]);
+    else if (e.key === "Escape") close();
+    else if (e.key === "Tab") { /* (the focus stays in the box) */ }
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  back.addEventListener("mousedown", (e) => { if (e.target === back) { e.preventDefault(); close(); } });
+  palette = { input, refresh: () => { items = paletteItems(); render(); }, close, shown: () => shown };
+  render();
+  input.focus();
 }
 
 // --- The view (page or continuous, zoom, comments shown, the rail): restored from the host's settings, and reported
@@ -824,6 +1155,7 @@ host?.addEventListener("message", async (e) => {
     } else if (m.type === "macros") {
       macroFiles = m.entries ?? [];
       if (document.querySelector(".dax-macromenu[data-open]")) renderMacroMenu();
+      palette?.refresh();
     } else if (m.type === "preparePrint") {
       preparePrint(m.id);
     } else if (m.type === "printDone") {
@@ -892,6 +1224,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "page view: " + pageView.join(", ") });
       post({ type: "log", text: "file menu: " + (await fileMenuChecks()) });
       post({ type: "log", text: "ribbon: " + (await ribbonChecks()) });
+      post({ type: "log", text: "palette: " + (await paletteChecks()) });
       post({ type: "log", text: "pdf: " + ((await measureAsk("measurePdf", "pdf")) ? "ok" : "FAILED") });
       post({ type: "log", text: "numbering: " + (await numberingChecks()) });
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
@@ -926,6 +1259,7 @@ window.addEventListener("keydown", (e) => {
   else if (ctrl && !e.shiftKey && key === "o") message = "openRequest";
   else if (ctrl && !e.shiftKey && key === ",") message = "settingsRequest";
   else if (ctrl && !e.shiftKey && key === "p") message = "printRequest";
+  else if (ctrl && e.shiftKey && key === "p") { e.preventDefault(); openPalette(); return; }
   else if (ctrl && !e.shiftKey && key === "s") { e.preventDefault(); ribbon?.download(); return; }
   if (!message) return;
   e.preventDefault();

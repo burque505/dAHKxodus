@@ -312,6 +312,10 @@ class MainForm : Form {
         ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"), macros = Lang.T("page.macros"), macrosTip = Lang.T("page.macrosTip"),
         close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"), hint = Lang.T("page.hint"),
         print = Lang.T("page.print"), printTip = Lang.T("page.printTip"), pdf = Lang.T("page.pdf"), pdfTip = Lang.T("page.pdfTip"),
+        palette = Lang.T("page.palette"), paletteTip = Lang.T("page.paletteTip"), palettePlaceholder = Lang.T("page.palettePlaceholder"),
+        paletteOn = Lang.T("page.paletteOn"), paletteNotNow = Lang.T("page.paletteNotNow"), paletteFile = Lang.T("page.paletteFile"),
+        paletteMacro = Lang.T("page.paletteMacro"), paletteTitleBar = Lang.T("page.paletteTitleBar"),
+        paletteStatusBar = Lang.T("page.paletteStatusBar"), paletteNone = Lang.T("page.paletteNone"),
         ribbon = Lang.Ribbon(),
     });
 
