@@ -12,6 +12,7 @@
 #load "host\Lang.cs"
 #load "host\SettingsDialog.cs"
 #load "host\Recovery.cs"
+#load "host\MacroHotkeys.cs"
 #load "host\MacroDialog.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
@@ -130,6 +131,8 @@ class MainForm : Form {
         Ahk = ahk; this.dir = dir; current = start; this.measureOut = measureOut;
         // (a measure run's copies go to a folder of its own, never among the user's)
         recovery = new Recovery(measureOut != "" ? Path.Combine(dir, "logs", "measure-recovery") : Recovery.DefaultFolder);
+        // (a measure run's macro hotkeys are its own: one for the page's check, the user's untouched)
+        if (measureOut != "") MacroHotkeys.Override = new(StringComparer.OrdinalIgnoreCase) { ["Insert date.ahk"] = "Ctrl+Alt+J" };
         autosaveTimer.Tick += (s, e) => _ = AutosaveAsync();
         // Leaving the window (another program, a dialog of its own excepted) is a moment to keep the copy current; not
         // more than twice a minute.
@@ -321,6 +324,7 @@ class MainForm : Form {
         recording = Lang.T("page.recording"), nothingRecorded = Lang.T("page.nothingRecorded"),
         recordHeader = Lang.T("page.recordHeader"), recordMoved = Lang.T("page.recordMoved"), recordSkipped = Lang.T("page.recordSkipped"),
         macrosFolder = Lang.T("page.macrosFolder"), macroDeleteTip = Lang.T("page.macroDeleteTip"),
+        hotkeys = Lang.T("page.hotkeys"), hotkeysTip = Lang.T("page.hotkeysTip"),
         ribbon = Lang.Ribbon(),
     });
 
@@ -554,6 +558,7 @@ class MainForm : Form {
                     Log($"editor ready {clock.ElapsedMilliseconds} ms ({Str("engine")} engine; page: {Str("sinceNavigation")} ms since navigation, scripts {Str("scripts")} ms, boot {Str("boot")} ms)");
                     SendUi();
                     if (measureOut == "") SendRecent();
+                    SendMacros();    // (their hotkeys work from the start)
                     pageReady = true;
                     StartAutosave();
                     // A copy left behind by a dAHKxodus that didn't close normally, offered before anything opens.
@@ -678,12 +683,16 @@ class MainForm : Form {
                     break;
                 case "listMacros":    // the Macros tab's list is opening
                     try { Macros.UpdateLib(Macros.UserFolder, dir); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-                    Send(new { type = "macros", entries = Macros.List(dir) });
+                    SendMacros();
+                    break;
+                case "hotkeysRequest":    // the Macros tab's Hotkeys...: with the keys dAHKxodus itself uses (taken)
+                    var takenNow = MacroHotkeys.Taken(m.TryGetProperty("taken", out var tk) ? tk.Clone() : default);
+                    BeginInvoke(() => ShowHotkeys(takenNow));
                     break;
                 case "runMacro":    // a macro from that list: dAHKxodus.ahk starts it, told this window (DAHKXODUS_HWND)
                     var macroId = m.GetProperty("id").GetInt32();
                     if (Macros.List(dir).Any(x => string.Equals(x.path, Str("path"), StringComparison.OrdinalIgnoreCase))) {
-                        Log("macro: " + Path.GetFileName(Str("path")));
+                        Log("macro: " + Path.GetFileName(Str("path")) + (Str("hotkey") != "" ? $" (hotkey {Str("hotkey")})" : ""));
                         CallAhk(RunMacroTag, macroId, Str("path"));
                     } else Send(new { type = "ahkResult", id = macroId, result = "", error = Lang.T("macro.notFound", Str("path")) });
                     break;
@@ -703,8 +712,9 @@ class MainForm : Form {
                     break;
                 case "recorded":    // a macro recording stopped: its script, to name and save
                     var recordedScript = Str("script");
+                    var takenKeys = MacroHotkeys.Taken(m.TryGetProperty("taken", out var rt) ? rt.Clone() : default);
                     if (measureOut != "") MeasureRecorded(recordedScript);
-                    else BeginInvoke(() => SaveRecordedMacro(recordedScript));    // (the dialog runs its own loop)
+                    else BeginInvoke(() => SaveRecordedMacro(recordedScript, takenKeys));    // (the dialog runs its own loop)
                     break;
                 case "measureRunRecorded":    // (measure runs) the recorded macro, replayed
                     if (measureOut != "") CallAhk(RunMacroTag, 0, Path.Combine(dir, "logs", "measure-recorded.ahk"));
@@ -1099,14 +1109,15 @@ class MainForm : Form {
 
     // The recording's script: named and saved in the user's Macros folder (the program's may be read-only), where the
     // Macros tab lists it. The user may change the script first, or discard it.
-    void SaveRecordedMacro(string script) {
+    void SaveRecordedMacro(string script, Dictionary<string, string> taken) {
         if (asking) return;
-        string name;
+        string name, hotkey;
         asking = true;
         try {
-            using var dlg = new MacroDialog(Macros.UniqueName(Lang.T("macro.defaultName")), script);
+            using var dlg = new MacroDialog(Macros.UniqueName(Lang.T("macro.defaultName")), script, MacroHotkeys.All(), taken);
             if (dlg.ShowDialog(this) != DialogResult.OK) { SendStatus(Lang.T("macro.discarded")); return; }
             name = dlg.MacroName;
+            hotkey = dlg.Hotkey;
             script = dlg.Script;
             var path = Macros.UserPath(name);
             if (File.Exists(path) && MessageBox.Show(this, Lang.T("macro.replace", name), "dAHKxodus",
@@ -1115,13 +1126,39 @@ class MainForm : Form {
                 return;
             }
             Macros.Save(path, script, dir);
-            Log($"macro recorded: {Path.GetFileName(path)} ({script.Split('\n').Length} lines)");
+            // (its hotkey, or none: a macro it replaces loses its own; another macro may have given it up)
+            var hotkeys = dlg.Hotkeys;
+            if (hotkey == "") hotkeys.Remove(Path.GetFileName(path)); else hotkeys[Path.GetFileName(path)] = hotkey;
+            MacroHotkeys.Save(hotkeys);
+            Log($"macro recorded: {Path.GetFileName(path)} ({script.Split('\n').Length} lines){(hotkey != "" ? ", hotkey " + hotkey : "")}");
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             Log("macro not saved: " + ex.Message);
             MessageBox.Show(this, Lang.T("macro.saveFailed", ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         } finally { asking = false; }
-        SendStatus(Lang.T("macro.saved", name));
+        SendStatus(hotkey != "" ? Lang.T("macro.savedHotkey", name, hotkey) : Lang.T("macro.saved", name));
+        SendMacros();
+    }
+
+    // The macros, with their hotkeys, for the page's Macros list, palette and keys.
+    void SendMacros() {
+        if (web.CoreWebView2 != null) Send(new { type = "macros", entries = Macros.List(dir) });
+    }
+
+    // The Macros tab's Hotkeys...: every macro with its hotkey; OK keeps what the user set.
+    void ShowHotkeys(Dictionary<string, string> taken) {
+        if (asking || measureOut != "") return;
+        asking = true;
+        try {
+            var macros = Macros.List(dir).Select(x => (Path.GetFileName(x.path), x.label, x.user)).ToList();
+            using var dlg = new MacroHotkeysDialog(macros, MacroHotkeys.All(), taken);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            // (only the macros there are: a hotkey of one deleted or renamed meanwhile goes)
+            var names = macros.Select(x => x.Item1).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            MacroHotkeys.Save(dlg.Result.Where(p => names.Contains(p.Key)).ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase));
+            Log("macro hotkeys: " + string.Join(", ", MacroHotkeys.All().Select(p => $"{p.Key}={p.Value}")));
+        } finally { asking = false; }
+        SendMacros();
     }
 
     // A macro of the user's (not one that came with the program), to the Recycle Bin once the user says yes.
@@ -1142,8 +1179,11 @@ class MainForm : Form {
             }
         } finally { asking = false; }
         Log("macro deleted: " + Path.GetFileName(path));
+        // (its hotkey goes too, unless a macro of the same name is left in the program's folder)
+        if (!Macros.List(dir).Any(x => string.Equals(Path.GetFileName(x.path), Path.GetFileName(path), StringComparison.OrdinalIgnoreCase)))
+            MacroHotkeys.Set(Path.GetFileName(path), "");
         SendStatus(Lang.T("macro.deleted", name));
-        Send(new { type = "macros", entries = Macros.List(dir) });
+        SendMacros();
     }
 
     // (Measure runs) The recording goes to logs\measure-recorded.ahk, no dialog; measureRunRecorded replays it.
@@ -1173,15 +1213,16 @@ class MainForm : Form {
 // The Macros tab's list: the .ahk files in the program's macros folder and in the user's (Macros beside
 // settings.ini), each with its first comment line as its tip.
 static class Macros {
-    /// user: one of the user's own (their Macros folder), which they may delete from the list.
-    public record Entry(string path, string label, string title, bool user);
+    /// user: one of the user's own (their Macros folder), which they may delete from the list. hotkey: its keys, or "".
+    public record Entry(string path, string label, string title, bool user, string hotkey);
 
     public static List<Entry> List(string programFolder) {
         var list = new List<Entry>();
+        var hotkeys = MacroHotkeys.All();
         foreach (var (folder, user) in new[] { (Path.Combine(programFolder, "macros"), false), (UserFolder, true) }) {
             if (!Directory.Exists(folder)) continue;
             foreach (var file in Directory.EnumerateFiles(folder, "*.ahk").Order(StringComparer.OrdinalIgnoreCase))
-                list.Add(new Entry(file, Path.GetFileNameWithoutExtension(file), Tip(file), user));
+                list.Add(new Entry(file, Path.GetFileNameWithoutExtension(file), Tip(file), user, hotkeys.GetValueOrDefault(Path.GetFileName(file)) ?? ""));
         }
         return list;
     }

@@ -426,6 +426,36 @@ async function recordingChecks() {
   return out.join(", ");
 }
 
+// Macro hotkeys, as keys would: the measure run's own (the host's: Insert date.ahk = Ctrl+Alt+J) is listed with the
+// macro, in the Macros list and the palette; pressed in a new document, the page takes it (nothing else sees it) and
+// the macro types the date; keys that aren't a hotkey are left alone; Bold's Ctrl+B is among the keys the dialogs warn of.
+async function hotkeyChecks() {
+  const out = [];
+  const m = macros().find((x) => x.hotkey === "Ctrl+Alt+J");
+  out.push(`listed ${m?.path?.endsWith("Insert date.ahk") ? "ok" : `FAILED (${JSON.stringify(macroFiles.map((x) => x.hotkey))})`}`);
+  out.push(`palette ${paletteItems().find((i) => i.key === "m:" + m?.path)?.keys === "Ctrl+Alt+J" ? "ok" : "FAILED"}`);
+  const taken = takenShortcuts();
+  out.push(`taken list ${taken.some((t) => t.keys === "Ctrl+B") && taken.some((t) => t.keys === "Ctrl+Shift+P") ? "ok" : `FAILED (${taken.map((t) => t.keys).join(" ")})`}`);
+  openInContinuousView();
+  ribbon.openBlank("hotkey.docx");
+  caretAtStart(); relabel();
+  await frame();
+  const press = (k, code) => {
+    const e = new KeyboardEvent("keydown", { key: k, code, ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    (document.activeElement ?? window).dispatchEvent(e);
+    return e;
+  };
+  const other = press("k", "KeyK");
+  out.push(`other keys left alone ${other.defaultPrevented ? "FAILED" : "ok"}`);
+  const year = String(new Date().getFullYear());
+  const pressed = press("j", "KeyJ");
+  out.push(`taken ${pressed.defaultPrevented ? "ok" : "FAILED"}`);
+  const until = performance.now() + 15000;
+  while (performance.now() < until && !ribbon.exec("text").includes(year)) await new Promise((r) => setTimeout(r, 200));
+  out.push(`ran ${ribbon.exec("text").includes(year) ? "ok" : `FAILED (text ${JSON.stringify(ribbon.exec("text"))})`}`);
+  return out.join(", ");
+}
+
 // The command palette, as keys would: Ctrl+Shift+P opens it with the focus in its box; typing finds Bold (named as the
 // ribbon names it, in the language in use) first, at its place on the Home tab; a macro and a list's choice are there;
 // Enter on Page width runs it as its button does and closes the palette; Escape closes it and gives the document its
@@ -685,6 +715,7 @@ const ui = {
   recordHeader: "Recorded in dAHKxodus on {0}. Each line is a Doc call: Doc.Help() lists them.",
   recordMoved: "(here the caret was moved, or text selected: not recorded)", recordSkipped: "({0}: not recorded)",
   macrosFolder: "Open my macros folder", macroDeleteTip: "(right-click to delete it)",
+  hotkeys: "Hotkeys…", hotkeysTip: "Give a macro a hotkey: it runs while dAHKxodus is the active window",
 };
 // The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
 // help line under it, which the host gives whole (a sentence translated word by word would read badly). Again after
@@ -759,17 +790,71 @@ let renderMacroMenu = () => {};    // (addMacrosTab's: draws the open list again
 const macros = () => [
   { fn: "LegalDate", label: ui.ahk, title: ui.ahkTip },
   ...macroFiles.map((m, i) => ({
-    path: m.path, label: m.label, user: !!m.user, separatorBefore: i === 0,
+    path: m.path, label: m.label, user: !!m.user, separatorBefore: i === 0, hotkey: m.hotkey ?? "",
     title: (m.title || m.path) + (m.user ? "\n" + ui.macroDeleteTip : ""),
   })),
 ];
-function runMacro(m) {
-  if (m.fn) { insertFromAhk(m.fn).catch((e) => ribbon.setStatus("AHK: " + e.message)); return; }
-  new Promise((resolve, reject) => {
+// (resolves once AutoHotkey has started the macro; false when it could not)
+function runMacro(m, hotkey = "") {
+  if (m.fn) return insertFromAhk(m.fn).then(() => true, (e) => { ribbon.setStatus("AHK: " + e.message); return false; });
+  return new Promise((resolve, reject) => {
     const id = ++nextId;
     pending.set(id, { resolve, reject });
-    post({ type: "runMacro", id, path: m.path });
-  }).catch((e) => ribbon.setStatus("AHK: " + e.message));
+    post({ type: "runMacro", id, path: m.path, hotkey });
+  }).then(() => true, (e) => { ribbon.setStatus("AHK: " + e.message); return false; });
+}
+
+// --- Macro hotkeys (the Macros tab's Hotkeys…, or the Save Macro dialog; settings.ini's [MacroHotkeys]): the keys
+// run their macro while this window is active, taken before the ribbon and the editor see them (in the capture phase,
+// registered before the palette's), so a hotkey the user gave a macro wins over dAHKxodus's own (the dialog asks first).
+// The keys are named from the key's virtual-key code, as the host names them ("Ctrl+Alt+D", "Ctrl+Shift+F5", "F9"),
+// so they match whatever the keyboard layout types.
+const KEY_NAMES = { 45: "Insert", 46: "Delete", 36: "Home", 35: "End", 33: "PageUp", 34: "PageDown", 32: "Space",
+  19: "Pause", 38: "Up", 40: "Down", 37: "Left", 39: "Right" };
+function keyNameOf(e) {
+  let code = e.keyCode;
+  // (an event made by a script may have no keyCode: its code then, "KeyJ", "Digit2", "F5", "Numpad1")
+  if (!code && e.code) {
+    const c = /^(?:Key([A-Z])|Digit(\d))$/.exec(e.code);
+    if (c) code = (c[1] ?? c[2]).charCodeAt(0);
+    else if (/^F\d{1,2}$/.test(e.code)) code = 111 + parseInt(e.code.slice(1), 10);
+    else if (/^Numpad\d$/.test(e.code)) code = 96 + parseInt(e.code.slice(6), 10);
+  }
+  if ((code >= 65 && code <= 90) || (code >= 48 && code <= 57)) return String.fromCharCode(code);
+  if (code >= 112 && code <= 135) return "F" + (code - 111);
+  if (code >= 96 && code <= 105) return "Num" + (code - 96);
+  return KEY_NAMES[code] ?? null;
+}
+function chordOf(e) {
+  const name = keyNameOf(e);
+  if (!name) return "";
+  return (e.ctrlKey ? "Ctrl+" : "") + (e.altKey ? "Alt+" : "") + (e.shiftKey ? "Shift+" : "") + name;
+}
+window.addEventListener("keydown", (e) => {
+  if (e.repeat || e.isComposing || palette || !macroFiles.some((m) => m.hotkey)) return;
+  const chord = chordOf(e);
+  // (the same file name in both folders: the user's own, listed last)
+  const m = chord ? macros().filter((x) => x.hotkey === chord).pop() : null;
+  if (!m) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  runMacro(m, chord);
+}, true);
+// The keys dAHKxodus itself uses, named: the dialogs ask before a macro takes one. The ribbon's (their tooltips say
+// them, as the palette shows), and the ones the page and the editor take without a button saying so.
+function takenShortcuts() {
+  const tr = (english) => ui.ribbon?.[english] ?? english;
+  const taken = paletteItems().filter((i) => i.keys && !i.key.startsWith("m:")).map((i) => ({ keys: i.keys, name: i.name }));
+  for (const [keys, name] of [["Ctrl+Z", tr("Undo")], ["Ctrl+Y", tr("Redo")], ["Ctrl+A", "Select all"], ["Ctrl+C", "Copy"],
+    ["Ctrl+X", "Cut"], ["Ctrl+V", "Paste"], ["Ctrl+S", tr("Save")], ["Ctrl+Shift+S", tr("Save As…")], ["F12", tr("Save As…")],
+    ["Ctrl+N", tr("New")], ["Ctrl+O", tr("Open…")], ["Ctrl+P", ui.print ?? "Print…"], ["Ctrl+,", ui.settings],
+    ["Ctrl+Shift+P", ui.palette], ["Ctrl+Shift+R", ui.record], ["Alt+F", tr("File")], ["Ctrl+B", tr("Bold")],
+    ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")]])
+    taken.push({ keys, name });
+  return taken;
+}
+function showHotkeys() {
+  post({ type: "hotkeysRequest", taken: takenShortcuts() });
 }
 
 function labelButtons() {
@@ -781,6 +866,8 @@ function labelButtons() {
   if (group) group.textContent = ui.macros;
   const button = document.querySelector(".dax-macrobutton");
   if (button) { button.textContent = ui.macros + " \u25BE"; button.title = ui.macrosTip; }
+  const hotkeys = document.querySelector(".dax-hotkeysbutton");
+  if (hotkeys) { hotkeys.textContent = ui.hotkeys; hotkeys.title = ui.hotkeysTip; }
   showRecording();
   for (const b of document.querySelectorAll(".dax-palette-button, .dax-palettetab")) {
     b.title = ui.paletteTip;
@@ -844,8 +931,12 @@ function addMacrosTab() {
   panel.innerHTML = '<div class="dxr-group dax-macrogroup"><span class="dxr-glabel"></span><div class="dxr-row">'
     + '<button type="button" class="dax-macrobutton" aria-haspopup="menu" aria-expanded="false"></button>'
     + '<button type="button" class="dax-recordbutton"></button>'
+    + '<button type="button" class="dax-hotkeysbutton"></button>'
     + '<button type="button" class="dax-palettetab"></button></div></div>';
   viewPanel.after(panel);
+  const hotkeysButton = panel.querySelector(".dax-hotkeysbutton");
+  hotkeysButton.addEventListener("mousedown", (e) => e.preventDefault());
+  hotkeysButton.addEventListener("click", showHotkeys);
   const recordButton = panel.querySelector(".dax-recordbutton");
   recordButton.addEventListener("mousedown", (e) => e.preventDefault());
   recordButton.addEventListener("click", toggleRecording);
@@ -868,6 +959,11 @@ function addMacrosTab() {
       item.title = m.title;
       item.innerHTML = "<span></span>";
       item.firstChild.textContent = m.label;
+      if (m.hotkey) {
+        const kbd = document.createElement("kbd");
+        kbd.textContent = m.hotkey;
+        item.append(kbd);
+      }
       item.addEventListener("mousedown", (e) => e.preventDefault());
       item.addEventListener("click", () => { close(); runMacro(m); });
       // (right-click: one of the user's own macros can go, after the host asks)
@@ -980,7 +1076,7 @@ function toggleRecording() {
   while (lines.length && lines[lines.length - 1].startsWith(";")) lines.pop();    // (a trailing "moved": nothing after it)
   if (!lines.some((l) => !l.startsWith(";"))) { ribbon.setStatus(ui.nothingRecorded); return; }
   const header = ["#Requires AutoHotkey v2.0", "#Include <Doc>", "; " + ui.recordHeader.replace("{0}", new Date().toLocaleString())];
-  post({ type: "recorded", script: [...header, ...lines].join("\n") + "\n" });
+  post({ type: "recorded", script: [...header, ...lines].join("\n") + "\n", taken: takenShortcuts() });
 }
 // Typing, as the document's input events tell it (Enter and Backspace are keys the editor takes itself: below).
 const inDocumentBlock = (t) => t instanceof Element && !!t.closest('#app [data-anchor][contenteditable="true"]')
@@ -1122,7 +1218,7 @@ function paletteItems() {
       on: false, off: b.disabled, run: () => b.click() });
   }
   for (const m of macros())
-    add({ key: "m:" + (m.fn ?? m.path), name: m.label, where: ui.paletteMacro, description: m.title, keys: "", on: false, off: false, run: () => runMacro(m) });
+    add({ key: "m:" + (m.fn ?? m.path), name: m.label, where: ui.paletteMacro, description: m.title, keys: m.hotkey ?? "", on: false, off: false, run: () => runMacro(m) });
   return items;
 }
 
@@ -1434,6 +1530,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "numbering: " + (await numberingChecks()) });
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
       post({ type: "log", text: "recording: " + (await recordingChecks()) });
+      post({ type: "log", text: "hotkeys: " + (await hotkeyChecks()) });
       // Doc.ahk: tests\doc-check.ahk, a script of its own, drives the editor and logs what it found.
       post({ type: "log", text: "doc api: " + ({ true: "ok", false: "FAILED", null: "FAILED (no answer)" })[await measureAsk("measureDocScript", "docScript", 70000)] });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.

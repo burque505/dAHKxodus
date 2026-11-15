@@ -41,6 +41,7 @@ public static class AppFolders {
 //   [Window]  Left, Top, Width, Height, Maximized    (WindowPlacement)
 //   [View]    Paginated, Zoom, Comments, Rail        (the page's view, restored at the next start)
 //   [Recent]  File1, File2, ...                      (RecentFiles)
+//   [MacroHotkeys]  <macro file name>=Ctrl+Alt+D    (MacroHotkeys, host\MacroHotkeys.cs)
 public static class Settings {
     static List<string>? lines;
     static bool batching;
@@ -152,11 +153,24 @@ public static class Settings {
         return result;
     }
 
+    /// A section's keys and values, in file order.
+    public static List<(string Key, string Value)> Pairs(string section) {
+        var (start, end) = Find(section);
+        var result = new List<(string, string)>();
+        for (int i = start; start >= 0 && i < end; i++)
+            if (KeyOf(Lines[i], out var k, out var v)) result.Add((k, v));
+        return result;
+    }
+
     /// Replaces a section's keys with prefix1=..., prefix2=..., keeping its place in the file.
-    public static void SetValues(string section, string prefix, IEnumerable<string> values) {
+    public static void SetValues(string section, string prefix, IEnumerable<string> values) =>
+        SetPairs(section, values.Select((v, i) => ($"{prefix}{i + 1}", v)));
+
+    /// Replaces a section's keys with these, keeping its place in the file.
+    public static void SetPairs(string section, IEnumerable<(string Key, string Value)> pairs) {
         Fresh();
         var all = Lines;
-        var body = values.Select((v, i) => $"{prefix}{i + 1}={v}").ToList();
+        var body = pairs.Select(p => $"{p.Key}={p.Value}").ToList();
         var (start, end) = Find(section);
         if (start < 0) {
             if (all.Count > 0 && all[^1].Trim() != "") all.Add("");
