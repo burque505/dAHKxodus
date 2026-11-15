@@ -305,7 +305,7 @@ class MainForm : Form {
     // The labels the page adds to the ribbon, in the user's language.
     void SendUi() => Send(new {
         type = "ui", settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
-        ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"),
+        ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"), macros = Lang.T("page.macros"), macrosTip = Lang.T("page.macrosTip"),
         close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"), hint = Lang.T("page.hint"),
         print = Lang.T("page.print"), printTip = Lang.T("page.printTip"), pdf = Lang.T("page.pdf"), pdfTip = Lang.T("page.pdfTip"),
         ribbon = Lang.Ribbon(),
@@ -605,8 +605,10 @@ class MainForm : Form {
                 case "view":    // the page's view changed: kept for settings.ini's [View] at close
                     view = new() {
                         ["Paginated"] = Str("paginated") is "True" or "true" ? "1" : "0",
+                        // (a number, 1 = 100%; "width": Page width; "page": One page, a whole page in view)
                         ["Zoom"] = m.TryGetProperty("zoom", out var z) && z.ValueKind == JsonValueKind.Number
-                            ? z.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture) : "",
+                            ? z.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            : Str("zoom") is "width" or "page" ? Str("zoom") : "",
                         ["Comments"] = Str("comments") is "True" or "true" ? "1" : "0",
                         ["Rail"] = Str("rail") is "True" or "true" ? "1" : "0",
                     };

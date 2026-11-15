@@ -14,8 +14,10 @@
 
   "page.settings": "Settings",
   "page.settingsTip": "dAHKxodus's settings (Ctrl+,)",
-  "page.ahk": "AHK: date",
+  "page.ahk": "Insert legal date",
   "page.ahkTip": "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
+  "page.macros": "Macros",
+  "page.macrosTip": "Run an AutoHotkey macro (the methods of class Bridge in dAHKxodus.ahk)",
   "page.close": "Close",
   "page.closeTip": "Close dAHKxodus",
   "page.hint": "Click any paragraph, heading, table cell, footnote, header or footer to edit it. <kbd>Enter</kbd> splits a block, <kbd>Backspace</kbd> at the start merges it into the previous one, <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes. Select text and press <b>New Comment</b> to annotate it. Only the block you changed re-renders — everything else keeps full fidelity, and <b>Save</b> writes a lossless .docx.",

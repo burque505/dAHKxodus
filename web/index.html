@@ -5,7 +5,11 @@
 <title>dAHKxodus</title><style>
   html, body { margin: 0; height: 100%; background: #f3f3f3; }
   #app { height: 100vh; }
-  .dax-ahk { margin-left: 8px; }
+  /* Save stays in the File menu and on Ctrl+S, not in the title bar; Settings has a gear there instead. */
+  #app .dxr-quick [data-dxr="save"] { display: none; }
+  #app .dax-settings { font-size: 22px; line-height: 1; padding: 0 6px; }
+  /* The Macros tab's list (as AhkWord's macros gallery): under its button, styled as the ribbon's File menu. */
+  .dax-macromenu { position: fixed; }
   /* Printing and PDF (the host's Print and Export to PDF): the document's pages only, one a sheet, as the page view
      draws them; the page's size comes from preparePrint's @page rule. */
   @media print {
@@ -329,6 +333,55 @@ async function fileMenuChecks() {
   return `${opened ? "opened" : "NOT opened"}, items ${shown.join(" | ")}, ${menu.hasAttribute("data-open") ? "still open" : "closed by Escape"} ${ok ? "ok" : "FAILED"}; tabs ${tabs}`;
 }
 
+// The page's own ribbon parts, as clicks would: no Save in the title bar, Settings' gear there instead; the Macros tab
+// and its list (Escape closes it); Page width makes the page as wide as the window, and the view reports "width".
+async function ribbonChecks() {
+  const out = [];
+  const save = ribbon.control("save"), gear = document.querySelector(".dax-settings");
+  out.push(`Save in title bar ${save && save.offsetParent === null ? "hidden ok" : "SHOWN FAILED"}`);
+  out.push(`gear ${gear && gear.offsetParent !== null && gear.textContent === "⚙" ? "ok" : "FAILED"}`);
+  const tab = document.querySelector('.dxr-tab[data-tab="dax-macros"]');
+  tab?.click();
+  await frame();
+  const panel = document.querySelector('.dxr-panel[data-panel="dax-macros"]');
+  const button = panel?.querySelector(".dax-macrobutton");
+  button?.click();
+  await frame();
+  const menu = document.querySelector(".dax-macromenu");
+  const items = Array.from(menu?.querySelectorAll('button[role="menuitem"]') ?? []).map((b) => b.textContent);
+  const opened = !!menu?.hasAttribute("data-open");
+  await capture("measure-macros");
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await frame();
+  out.push(`Macros tab ${tab && panel?.hasAttribute("data-active") ? "ok" : "FAILED"}, list ${opened ? "opened" : "NOT opened"} `
+    + `(${items.join(" | ")}) ${opened && items.includes(ui.ahk) ? "ok" : "FAILED"}, ${menu?.hasAttribute("data-open") ? "still open FAILED" : "closed by Escape ok"}`);
+  const before = viewState();
+  document.querySelector('.dxr-tab[data-tab="view"]')?.click();
+  ribbon.control("zoomfit")?.click();
+  await frame();
+  // (the room the page has: the surface's, less its padding, which leaves the comments their column when they show)
+  const surface = document.querySelector("#app [data-dxr-surface]"), cs = getComputedStyle(surface);
+  const room = surface.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const sheet = document.querySelector("#app .page-box") ?? document.querySelector("#app .docx-body-flow");
+  const width = sheet?.getBoundingClientRect().width ?? 0;
+  const fits = ribbon.editor.fitsPageWidth && width > room - 40 && width <= room;
+  out.push(`Page width: page ${Math.round(width)} px in ${Math.round(room)} px, zoom ${Math.round(ribbon.editor.requestedZoom * 100)}%, `
+    + `view says ${JSON.stringify(viewState().zoom)} ${fits && viewState().zoom === "width" ? "ok" : "FAILED"}`);
+  // One page: a whole page in view (its height within the scrolling area)
+  ribbon.control("zoomonepage")?.click();
+  await frame();
+  const box = document.querySelector("#app .page-box") ?? document.querySelector("#app .docx-body-flow");
+  const area = document.querySelector("#app .dxr-scroll").clientHeight;
+  const high = box?.getBoundingClientRect().height ?? 0;
+  const paged = !!document.querySelector("#app .page-box");
+  const whole = ribbon.editor.fitsOnePage && (!paged || high <= area);
+  out.push(`One page: ${paged ? `page ${Math.round(high)} px high in ${area} px` : "continuous view"}, zoom ${Math.round(ribbon.editor.requestedZoom * 100)}%, `
+    + `view says ${JSON.stringify(viewState().zoom)} ${whole && viewState().zoom === "page" ? "ok" : "FAILED"}`);
+  applyView({ ...before, zoom: typeof before.zoom === "string" ? 1 : before.zoom ?? 1 });
+  document.querySelector('.dxr-tab[data-tab="home"]')?.click();
+  return out.join("; ");
+}
+
 // The ribbon's Numbering and Increase indent buttons, as clicks would: three neighbouring paragraphs numbered, the
 // middle one indented. Word shows "1.", "a.", "2." (a nested level steps to the next number format).
 async function numberingChecks() {
@@ -474,7 +527,8 @@ async function unchangedChecks() {
 // The host's labels for the AutoHotkey button and its File menu commands, in the user's language (its "ui" message).
 const ui = {
   settings: "Settings", settingsTip: "dAHKxodus's settings (Ctrl+,)", close: "Close", closeTip: "Close dAHKxodus",
-  ahk: "AHK: date", ahkTip: "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
+  ahk: "Insert legal date", ahkTip: "Ask AutoHotkey for today's date (LegalDate in dAHKxodus.ahk) and type it at the caret",
+  macros: "Macros", macrosTip: "Run an AutoHotkey macro (the methods of class Bridge in dAHKxodus.ahk)",
 };
 // The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
 // help line under it, which the host gives whole (a sentence translated word by word would read badly). Again after
@@ -530,27 +584,93 @@ const hostFileMenu = () => [
   { id: "settings", label: ui.settings, title: ui.settingsTip, shortcut: "Ctrl+,", separatorBefore: true },
   { id: "close", label: ui.close, title: ui.closeTip, separatorBefore: true },
 ];
+// The macros on the Macros tab: AutoHotkey functions (class Bridge in dAHKxodus.ahk) whose answer is typed at the
+// caret. (One for now; a list, as AhkWord's macros gallery, so more can join it.)
+const macros = () => [
+  { fn: "LegalDate", label: ui.ahk, title: ui.ahkTip },
+];
+function runMacro(fn) {
+  insertFromAhk(fn).catch((e) => ribbon.setStatus("AHK: " + e.message));
+}
+
 function labelButtons() {
-  const ahk = document.querySelector(".dax-ahk"), settings = document.querySelector(".dax-settings");
-  if (ahk) { ahk.textContent = ui.ahk; ahk.title = ui.ahkTip; }
-  if (settings) { settings.textContent = ui.settings; settings.title = ui.settingsTip; }
+  const settings = document.querySelector(".dax-settings");
+  if (settings) { settings.title = ui.settingsTip; settings.setAttribute("aria-label", ui.settings); }
+  const tab = document.querySelector('.dxr-tab[data-tab="dax-macros"]');
+  if (tab) tab.textContent = ui.macros;
+  const group = document.querySelector(".dax-macrogroup .dxr-glabel");
+  if (group) group.textContent = ui.macros;
+  const button = document.querySelector(".dax-macrobutton");
+  if (button) { button.textContent = ui.macros + " \u25BE"; button.title = ui.macrosTip; }
   ribbon?.setFileMenu(hostFileMenu());
 }
 
-// After Save: the AutoHotkey button, then Settings (also in the File menu).
+// The page's own controls: Settings (a gear in the title bar, where Save was; also in the File menu) and the Macros
+// tab (after View). Added once: the ribbon's chrome stays across documents.
 function addAhkButton() {
   const save = ribbon.control("save");
-  if (!save || document.querySelector(".dax-ahk")) return;
-  const b = document.createElement("button");
-  b.className = save.className + " dax-ahk";
-  b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the document's selection
-  b.addEventListener("click", () => insertFromAhk("LegalDate").catch((e) => ribbon.setStatus("AHK: " + e.message)));
+  if (!save || document.querySelector(".dax-settings")) return;
   const s = document.createElement("button");
-  s.className = save.className + " dax-settings";
-  s.addEventListener("mousedown", (e) => e.preventDefault());
+  s.type = "button";
+  s.className = "dxr-icon dax-settings";
+  s.textContent = "\u2699";
+  s.addEventListener("mousedown", (e) => e.preventDefault());    // (keep the document's selection)
   s.addEventListener("click", () => post({ type: "settingsRequest" }));
-  save.after(b, s);
+  save.after(s);
+  addMacrosTab();
   labelButtons();
+}
+
+function addMacrosTab() {
+  const root = document.querySelector("#app .dxr");
+  const viewTab = root?.querySelector('.dxr-tab[data-tab="view"]');
+  const viewPanel = root?.querySelector('.dxr-panel[data-panel="view"]');
+  if (!viewTab || !viewPanel) return;
+  const tab = document.createElement("button");
+  tab.type = "button";
+  tab.className = "dxr-tab";
+  tab.setAttribute("role", "tab");
+  tab.dataset.tab = "dax-macros";
+  tab.setAttribute("aria-selected", "false");
+  tab.addEventListener("mousedown", (e) => e.preventDefault());
+  tab.addEventListener("click", () => ribbon.selectTab("dax-macros"));
+  viewTab.after(tab);
+
+  const panel = document.createElement("div");
+  panel.className = "dxr-panel";
+  panel.dataset.panel = "dax-macros";
+  panel.innerHTML = '<div class="dxr-group dax-macrogroup"><span class="dxr-glabel"></span><div class="dxr-row">'
+    + '<button type="button" class="dax-macrobutton" aria-haspopup="menu" aria-expanded="false"></button></div></div>';
+  viewPanel.after(panel);
+
+  const menu = document.createElement("div");
+  menu.className = "dxr-pop dxr-filemenu dax-macromenu";
+  menu.setAttribute("role", "menu");
+  root.appendChild(menu);
+  const button = panel.querySelector(".dax-macrobutton");
+  const close = () => { menu.removeAttribute("data-open"); button.setAttribute("aria-expanded", "false"); };
+  button.addEventListener("mousedown", (e) => e.preventDefault());
+  button.addEventListener("click", () => {
+    if (menu.hasAttribute("data-open")) { close(); return; }
+    menu.replaceChildren(...macros().map((m) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.title = m.title;
+      item.innerHTML = "<span></span>";
+      item.firstChild.textContent = m.label;
+      item.addEventListener("mousedown", (e) => e.preventDefault());
+      item.addEventListener("click", () => { close(); runMacro(m.fn); });
+      return item;
+    }));
+    const r = button.getBoundingClientRect();
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.setAttribute("data-open", "");
+    button.setAttribute("aria-expanded", "true");
+  });
+  document.addEventListener("mousedown", (e) => { if (!menu.contains(e.target) && e.target !== button) close(); }, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu.hasAttribute("data-open")) close(); }, true);
 }
 
 // --- The view (page or continuous, zoom, comments shown, the rail): restored from the host's settings, and reported
@@ -558,14 +678,17 @@ function addAhkButton() {
 const viewParams = new URLSearchParams(location.search);
 const savedView = {
   paginated: viewParams.has("paginated") ? viewParams.get("paginated") === "1" : null,
-  zoom: viewParams.has("zoom") ? parseFloat(viewParams.get("zoom")) : null,
+  // (a number, 1 = 100%; "width": Page width, the page as wide as the window; "page": One page, a whole page in view;
+  // both kept as the window resizes)
+  zoom: !viewParams.has("zoom") ? null : ["width", "page"].includes(viewParams.get("zoom")) ? viewParams.get("zoom")
+    : parseFloat(viewParams.get("zoom")),
   comments: viewParams.has("comments") ? viewParams.get("comments") === "1" : null,
   rail: viewParams.has("rail") ? viewParams.get("rail") === "1" : null,
 };
 function viewState() {
   return {
     paginated: !!ribbon.control("paginated")?.checked,
-    zoom: ribbon.editor?.requestedZoom ?? null,
+    zoom: ribbon.editor?.fitsPageWidth ? "width" : ribbon.editor?.fitsOnePage ? "page" : ribbon.editor?.requestedZoom ?? null,
     comments: !!ribbon.control("showcomments")?.checked,
     rail: !!ribbon.control("showrail")?.checked,
   };
@@ -606,7 +729,11 @@ function applyView(v) {
   if (v.paginated != null && !!ribbon.control("paginated")?.checked !== v.paginated)
     ribbon.control(v.paginated ? "viewpage" : "viewweb")?.click();
   setChecked("showcomments", v.comments);
-  if (v.zoom > 0 && Math.abs((ribbon.editor.requestedZoom ?? 1) - v.zoom) > 1e-6) {
+  if (v.zoom === "width") {
+    if (!ribbon.editor.fitsPageWidth) ribbon.control("zoomfit")?.click();
+  } else if (v.zoom === "page") {
+    if (!ribbon.editor.fitsOnePage) ribbon.control("zoomonepage")?.click();
+  } else if (v.zoom > 0 && (ribbon.editor.fitsPageWidth || ribbon.editor.fitsOnePage || Math.abs((ribbon.editor.requestedZoom ?? 1) - v.zoom) > 1e-6)) {
     const select = ribbon.control("zoomlevel") ?? ribbon.control("zoom");
     if (select) {
       const value = String(v.zoom);
@@ -717,6 +844,7 @@ host?.addEventListener("message", async (e) => {
       catch (err) { pageView.push(`Open FAILED (${err.message})`); }
       post({ type: "log", text: "page view: " + pageView.join(", ") });
       post({ type: "log", text: "file menu: " + (await fileMenuChecks()) });
+      post({ type: "log", text: "ribbon: " + (await ribbonChecks()) });
       post({ type: "log", text: "pdf: " + ((await measureAsk("measurePdf", "pdf")) ? "ok" : "FAILED") });
       post({ type: "log", text: "numbering: " + (await numberingChecks()) });
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });

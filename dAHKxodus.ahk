@@ -3,7 +3,7 @@
 #Include "Csharp-in-AHK.ahk"
 ; dAHKxodus: Docxodus's browser editor (web\index.html, npm package docxodus) in a WebView2 window
 ; (dAHKxodus.cs) hosted by this script. The editor calls AutoHotkey functions through a bridge: the methods of
-; class Bridge below (the "AHK: date" button calls Bridge.LegalDate).
+; class Bridge below (the Macros tab's "Insert legal date" calls Bridge.LegalDate).
 ;
 ; Usage:  AutoHotkey64.exe dAHKxodus.ahk [file.docx] [/measure out.docx]
 ;   /measure: open the file, put the caret at the end of the first paragraph, call LegalDate through the bridge,
