@@ -13,8 +13,8 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
 - [x] **0. The repository** (0.0.1): the trial's host and page, the build script and lock, headless engine checks
 - [x] **1. Edits you can trust** (0.0.1.0): Undo and Redo by keyboard as by the buttons; Undo in steps like Word's; your own
   name and initials on changes and comments; comments with their date; pictures stored where Word stores them
-- [ ] **2. A desktop program:** Open, Save, Save As, recent files, ask to save on close, autosave and recovery,
-  settings, print and PDF; the first installer preview (0.0.2.0)
+- [x] **2. A desktop program** (0.0.2.0): Open, Save, Save As, recent files, ask to save on close, autosave and
+  recovery, settings, print and PDF; the first installer preview, in a full and a light edition
 - [ ] **3. AutoHotkey:** a `Doc` object for scripts, with events; the command palette; macro recording and hotkeys;
   event hooks; your own buttons on the ribbon
 - [ ] **4. Paste and paragraphs:** pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph

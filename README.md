@@ -4,7 +4,17 @@ A word processor for Windows that opens and saves Word documents (.docx) as they
 
 dAHKxodus is the successor of [AhkWord](https://github.com/burque505/AhkWord). It shows [Docxodus](https://github.com/JSv4/Docxodus)'s Word editor in a WebView2 window, and runs Docxodus's editing engine natively in .NET, so a long document opens in a few seconds. AutoHotkey v2 starts it and answers the editor's calls through a bridge. [Csharp-in-AHK](https://github.com/burque505/Csharp-in-AHK) compiles the C# host when it starts.
 
-**Status: 0.0.1.0, an early start.** It opens, edits and saves .docx files; most of what a word processor needs is still to come. See [ROADMAP.md](ROADMAP.md).
+**Status: 0.0.2.0, a desktop program.** It opens, edits and saves .docx files, with recent files, autosave and recovery, settings (English and Spanish), print and PDF; most of what a word processor needs is still to come. See [ROADMAP.md](ROADMAP.md).
+
+## Installing it
+
+Download from the [0.0.2.0 installer preview](https://github.com/burque505/dAHKxodus/releases/tag/installer-0.0.2.0):
+
+- **Light** (`dAHKxodus-0.0.2.0-light-setup.exe`, 23 MB): uses the AutoHotkey v2 and the .NET 10 Desktop Runtime already on your computer; Setup offers to get them if it doesn't find them.
+- **Full** (`dAHKxodus-0.0.2.0-setup.exe`, 56 MB): everything inside, nothing else to install.
+- **Portable** (`...-portable.zip`, either edition): unzip and run `dAHKxodus.exe`; nothing is installed.
+
+Both install for your Windows user only, without administrator rights. They aren't signed yet, so Windows warns about them; the release notes say what to do.
 
 ## Running it from the source
 
