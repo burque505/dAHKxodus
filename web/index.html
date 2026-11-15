@@ -12,6 +12,9 @@
   .dax-macromenu { position: fixed; }
   /* The command palette (Ctrl+Shift+P): a box at the top, over the editor, in the ribbon's colours. */
   #app .dax-palette-button { padding: 0 6px; display: inline-flex; align-items: center; }
+  /* A macro being recorded: a red mark with its steps in the title bar (a click stops it). */
+  #app .dax-recmark { color: #dc2626; font-weight: 600; font-size: 12px; padding: 0 8px; background: #fef2f2; border-radius: 10px; }
+  #app .dax-recmark[hidden] { display: none; }
   .dax-palette-back { position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, .08); }
   .dax-palette {
     position: fixed; top: 72px; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 32px));
@@ -370,6 +373,59 @@ async function fileMenuChecks() {
   return `${opened ? "opened" : "NOT opened"}, items ${shown.join(" | ")}, ${menu.hasAttribute("data-open") ? "still open" : "closed by Escape"} ${ok ? "ok" : "FAILED"}; tabs ${tabs}`;
 }
 
+// Macro recording, as keys and clicks would: Ctrl+Shift+R starts it (the red mark shows); typing, a Backspace right
+// after typing, Enter, Bold, a style and Ctrl+E become Doc lines; Ctrl+Shift+R stops and the host writes the script
+// (logs\measure-recorded.ahk, no dialog); then a new document replays it (dAHKxodus.ahk runs it, as a macro) and comes
+// out as the recorded one did: the same text, the same style where the caret ends.
+async function recordingChecks() {
+  const out = [];
+  const key = (target, k, mods = {}) => target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...mods }));
+  const reply = (what, ms) => new Promise((resolve) => {
+    measureWaiters.set(what, resolve);
+    setTimeout(() => { if (measureWaiters.delete(what)) resolve(null); }, ms);
+  });
+  const blank = async (name) => {
+    openInContinuousView();
+    ribbon.openBlank(name);
+    caretAtStart(); relabel();
+    await frame();
+  };
+  await blank("record.docx");
+  key(document.activeElement ?? window, "R", { ctrlKey: true, shiftKey: true });    // (from the document, as a key is: the ribbon's Ctrl+R must not take it)
+  await frame();
+  const mark = document.querySelector(".dax-recmark");
+  out.push(`started ${recorder.on && mark && !mark.hidden ? "ok" : "FAILED"}`);
+  document.execCommand("insertText", false, "Recorded linex");
+  key(document.activeElement, "Backspace");
+  document.execCommand("delete");
+  key(document.activeElement, "Enter");
+  await frame();
+  document.execCommand("insertText", false, "Second");
+  document.querySelector('#app button[data-cmd="bold"]')?.click();
+  const style = ribbon.control("style");
+  const heading = Array.from(style?.options ?? []).find((o) => o.value === "Heading1")?.value;
+  if (style && heading) { style.value = heading; style.dispatchEvent(new Event("change", { bubbles: true })); }
+  key(document.activeElement, "e", { ctrlKey: true });
+  await frame();
+  const recorded = { text: ribbon.exec("text"), style: ribbon.exec("styleAtCaret") };
+  const written = reply("recorded", 10000);
+  key(document.activeElement ?? window, "R", { ctrlKey: true, shiftKey: true });    // (from the document, as a key is: the ribbon's Ctrl+R must not take it)
+  const lines = recorder.lines.slice();
+  const want = ['Doc.InsertText("Recorded line`nSecond")', "Doc.Bold()", 'Doc.Style("Heading1")', 'Doc.Align("center")'];
+  out.push(`lines ${JSON.stringify(lines) === JSON.stringify(want) ? "ok" : `FAILED (${lines.join(" | ")})`}, stopped ${!recorder.on && mark?.hidden ? "ok" : "FAILED"}`);
+  out.push(`written ${(await written) ? "ok" : "FAILED"}`);
+  // The replay: a new document, the macro run by dAHKxodus.ahk, as the Macros tab runs one.
+  await blank("replay.docx");
+  post({ type: "measureRunRecorded" });
+  const until = performance.now() + 20000;
+  while (performance.now() < until && ribbon.exec("text") !== recorded.text) await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 500));    // (the lines after the typing)
+  const replayed = { text: ribbon.exec("text"), style: ribbon.exec("styleAtCaret") };
+  const same = replayed.text === recorded.text && replayed.style === recorded.style && recorded.style === "Heading1";
+  out.push(`replayed ${same ? "ok" : `FAILED (recorded ${JSON.stringify(recorded)}, replayed ${JSON.stringify(replayed)})`}`);
+  return out.join(", ");
+}
+
 // The command palette, as keys would: Ctrl+Shift+P opens it with the focus in its box; typing finds Bold (named as the
 // ribbon names it, in the language in use) first, at its place on the Home tab; a macro and a list's choice are there;
 // Enter on Page width runs it as its button does and closes the palette; Escape closes it and gives the document its
@@ -380,7 +436,7 @@ async function paletteChecks() {
   const key = (target, k, mods = {}) => target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...mods }));
   caretAtStart();
   const block = document.activeElement;
-  key(window, "P", { ctrlKey: true, shiftKey: true });
+  key(document.activeElement ?? window, "P", { ctrlKey: true, shiftKey: true });
   await frame();
   const box = document.querySelector(".dax-palette");
   out.push(`opened ${box && palette && document.activeElement === palette.input ? "ok" : "FAILED"}`);
@@ -411,7 +467,7 @@ async function paletteChecks() {
   key(palette.input, "Enter");
   await frame();
   out.push(`Enter ran it ${!palette && ribbon.editor.fitsPageWidth ? "ok" : "FAILED"}, focus back in the document ${document.activeElement === block ? "ok" : "FAILED"}`);
-  key(window, "P", { ctrlKey: true, shiftKey: true });
+  key(document.activeElement ?? window, "P", { ctrlKey: true, shiftKey: true });
   await frame();
   await type("zzzz nothing");
   const none = document.querySelector(".dax-palette .dax-empty")?.textContent;
@@ -624,6 +680,11 @@ const ui = {
   palette: "Command palette", paletteTip: "Find any command, macro, style or recent document (Ctrl+Shift+P)",
   palettePlaceholder: "Type a command, macro, style or document…", paletteOn: "on", paletteNotNow: "not now",
   paletteFile: "File", paletteMacro: "Macro", paletteTitleBar: "Title bar", paletteStatusBar: "Status bar", paletteNone: "Nothing matches",
+  record: "Record macro", recordTip: "Record what you type and the commands you run as a new macro (Ctrl+Shift+R)",
+  recordStop: "Stop recording", recording: "Recording: {0} steps. Ctrl+Shift+R stops.", nothingRecorded: "Nothing was recorded.",
+  recordHeader: "Recorded in dAHKxodus on {0}. Each line is a Doc call: Doc.Help() lists them.",
+  recordMoved: "(here the caret was moved, or text selected: not recorded)", recordSkipped: "({0}: not recorded)",
+  macrosFolder: "Open my macros folder", macroDeleteTip: "(right-click to delete it)",
 };
 // The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
 // help line under it, which the host gives whole (a sentence translated word by word would read badly). Again after
@@ -697,7 +758,10 @@ let macroFiles = [];
 let renderMacroMenu = () => {};    // (addMacrosTab's: draws the open list again)
 const macros = () => [
   { fn: "LegalDate", label: ui.ahk, title: ui.ahkTip },
-  ...macroFiles.map((m, i) => ({ path: m.path, label: m.label, title: m.title || m.path, separatorBefore: i === 0 })),
+  ...macroFiles.map((m, i) => ({
+    path: m.path, label: m.label, user: !!m.user, separatorBefore: i === 0,
+    title: (m.title || m.path) + (m.user ? "\n" + ui.macroDeleteTip : ""),
+  })),
 ];
 function runMacro(m) {
   if (m.fn) { insertFromAhk(m.fn).catch((e) => ribbon.setStatus("AHK: " + e.message)); return; }
@@ -717,6 +781,7 @@ function labelButtons() {
   if (group) group.textContent = ui.macros;
   const button = document.querySelector(".dax-macrobutton");
   if (button) { button.textContent = ui.macros + " \u25BE"; button.title = ui.macrosTip; }
+  showRecording();
   for (const b of document.querySelectorAll(".dax-palette-button, .dax-palettetab")) {
     b.title = ui.paletteTip;
     b.setAttribute("aria-label", ui.palette);
@@ -746,6 +811,14 @@ function addAhkButton() {
   p.addEventListener("mousedown", (e) => e.preventDefault());
   p.addEventListener("click", openPalette);
   s.after(p);
+  // While a macro is being recorded: a red mark with the steps so far; a click stops.
+  const rec = document.createElement("button");
+  rec.type = "button";
+  rec.className = "dax-recmark";
+  rec.hidden = true;
+  rec.addEventListener("mousedown", (e) => e.preventDefault());
+  rec.addEventListener("click", toggleRecording);
+  p.after(rec);
   addMacrosTab();
   labelButtons();
 }
@@ -770,8 +843,12 @@ function addMacrosTab() {
   panel.dataset.panel = "dax-macros";
   panel.innerHTML = '<div class="dxr-group dax-macrogroup"><span class="dxr-glabel"></span><div class="dxr-row">'
     + '<button type="button" class="dax-macrobutton" aria-haspopup="menu" aria-expanded="false"></button>'
+    + '<button type="button" class="dax-recordbutton"></button>'
     + '<button type="button" class="dax-palettetab"></button></div></div>';
   viewPanel.after(panel);
+  const recordButton = panel.querySelector(".dax-recordbutton");
+  recordButton.addEventListener("mousedown", (e) => e.preventDefault());
+  recordButton.addEventListener("click", toggleRecording);
   const paletteButton = panel.querySelector(".dax-palettetab");
   paletteButton.addEventListener("mousedown", (e) => e.preventDefault());
   paletteButton.addEventListener("click", openPalette);
@@ -793,12 +870,30 @@ function addMacrosTab() {
       item.firstChild.textContent = m.label;
       item.addEventListener("mousedown", (e) => e.preventDefault());
       item.addEventListener("click", () => { close(); runMacro(m); });
+      // (right-click: one of the user's own macros can go, after the host asks)
+      item.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (!m.path) return;
+        close();
+        post({ type: "deleteMacro", path: m.path });
+      });
       if (!m.separatorBefore) return [item];
       const sep = document.createElement("div");
       sep.className = "dxr-filesep";
       sep.setAttribute("role", "separator");
       return [sep, item];
     }));
+    const sep = document.createElement("div");
+    sep.className = "dxr-filesep";
+    sep.setAttribute("role", "separator");
+    const folder = document.createElement("button");
+    folder.type = "button";
+    folder.setAttribute("role", "menuitem");
+    folder.innerHTML = "<span></span>";
+    folder.firstChild.textContent = ui.macrosFolder;
+    folder.addEventListener("mousedown", (e) => e.preventDefault());
+    folder.addEventListener("click", () => { close(); post({ type: "openMacrosFolder" }); });
+    menu.append(sep, folder);
   };
   button.addEventListener("click", () => {
     if (menu.hasAttribute("data-open")) { close(); return; }
@@ -813,6 +908,116 @@ function addMacrosTab() {
   document.addEventListener("mousedown", (e) => { if (!menu.contains(e.target) && e.target !== button) close(); }, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu.hasAttribute("data-open")) close(); }, true);
 }
+
+// --- Macro recording (Ctrl+Shift+R; the Macros tab's Record button; the red mark in the title bar stops it), as
+// AhkWord's: what the user types and the commands they run become the lines of a new macro, each a Doc call (Doc.ahk).
+// The commands come from the ribbon's onCommand, which reports each one as exec takes it, whatever ran it (a button, a
+// list, a shortcut, the palette, the editor's own Ctrl+B); typing from the document's input events, Enter and Backspace
+// from its keys. What can't be replayed (moving the caret or selecting, with the mouse or the arrows; a command with no
+// Doc equivalent) is written as a comment, so the script says what it leaves out. Stop hands the script to the host,
+// which asks for a name and saves it in the user's Macros folder.
+const recorder = { on: false, lines: [], typed: "", moved: false };
+const isIdentifier = (k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k);
+// An AutoHotkey value: "text" (with its escapes), a number, true or false, {key: value}, [a, b].
+function ahkValue(v) {
+  if (v === null || v === undefined) return '""';
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : '""';
+  if (Array.isArray(v)) return "[" + v.map(ahkValue).join(", ") + "]";
+  if (typeof v === "object")
+    return "{" + Object.entries(v).map(([k, x]) => `${isIdentifier(k) ? k : `%${ahkValue(k)}%`}: ${ahkValue(x)}`).join(", ") + "}";
+  return '"' + String(v).replace(/`/g, "``").replace(/"/g, '`"').replace(/\r/g, "`r").replace(/\n/g, "`n").replace(/\t/g, "`t") + '"';
+}
+// One command as a Doc call: Doc.FontSize(14), Doc.Find("x", , 2); its arguments in the order the command lists them
+// (Doc.ahk maps them back by that order), an argument left out as an empty place.
+let commandInfo = null;
+function docCall(name, args = {}) {
+  commandInfo ??= new Map(ribbon.commands().map((c) => [c.name, Object.keys(c.args).map((k) => k.replace(/\?$/, ""))]));
+  const order = commandInfo.get(name);
+  const keys = Object.keys(args).filter((k) => args[k] !== undefined);
+  if (!order || !keys.every((k) => order.includes(k)))
+    return `Doc.Exec(${ahkValue(name)}${keys.length ? ", " + ahkValue(args) : ""})`;
+  const last = Math.max(-1, ...keys.map((k) => order.indexOf(k)));
+  const values = order.slice(0, last + 1).map((k) => (k in args && args[k] !== undefined ? ahkValue(args[k]) : ""));
+  return `Doc.${name[0].toUpperCase()}${name.slice(1)}(${values.join(", ")})`;
+}
+function recordLine(line) {
+  if (!recorder.on) return;
+  if (recorder.typed) { recorder.lines.push(`Doc.InsertText(${ahkValue(recorder.typed)})`); recorder.typed = ""; }
+  if (recorder.moved) { recorder.lines.push("; " + ui.recordMoved); recorder.moved = false; }
+  if (line) recorder.lines.push(line);
+  showRecording();
+}
+const recordCommand = (label, command) =>
+  recordLine(command ? docCall(command.name, command.args) : "; " + ui.recordSkipped.replace("{0}", label));
+function recordSteps() { return recorder.lines.filter((l) => !l.startsWith(";")).length + (recorder.typed ? 1 : 0); }
+function showRecording() {
+  const mark = document.querySelector(".dax-recmark");
+  if (mark) {
+    mark.hidden = !recorder.on;
+    mark.textContent = `● ${recordSteps()}`;
+    mark.title = ui.recordStop + " (Ctrl+Shift+R)";
+  }
+  const button = document.querySelector(".dax-recordbutton");
+  if (button) {
+    button.textContent = recorder.on ? "■ " + ui.recordStop : "● " + ui.record;
+    button.title = ui.recordTip;
+    button.classList.toggle("dxr-on", recorder.on);
+  }
+  if (recorder.on) ribbon?.setStatus(ui.recording.replace("{0}", recordSteps()));
+}
+function toggleRecording() {
+  if (!recorder.on) {
+    Object.assign(recorder, { on: true, lines: [], typed: "", moved: false });
+    commandInfo = null;
+    showRecording();
+    return;
+  }
+  recordLine("");
+  recorder.on = false;
+  showRecording();
+  const lines = recorder.lines.slice();
+  while (lines.length && lines[lines.length - 1].startsWith(";")) lines.pop();    // (a trailing "moved": nothing after it)
+  if (!lines.some((l) => !l.startsWith(";"))) { ribbon.setStatus(ui.nothingRecorded); return; }
+  const header = ["#Requires AutoHotkey v2.0", "#Include <Doc>", "; " + ui.recordHeader.replace("{0}", new Date().toLocaleString())];
+  post({ type: "recorded", script: [...header, ...lines].join("\n") + "\n" });
+}
+// Typing, as the document's input events tell it (Enter and Backspace are keys the editor takes itself: below).
+const inDocumentBlock = (t) => t instanceof Element && !!t.closest('#app [data-anchor][contenteditable="true"]')
+  && !t.closest(".docx-comment-gutter, textarea, input");
+document.addEventListener("input", (e) => {
+  if (!recorder.on || !inDocumentBlock(e.target)) return;
+  if (e.inputType === "insertText" || e.inputType === "insertReplacementText") recorder.typed += e.data ?? "";
+  else if (e.inputType === "insertFromPaste") recorder.typed += e.dataTransfer?.getData("text/plain") ?? "";
+  else return;
+  showRecording();
+}, true);
+document.addEventListener("keydown", (e) => {
+  if (!recorder.on || !inDocumentBlock(e.target) || e.altKey || e.isComposing) return;
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (e.key === "Enter" && !ctrl) { recorder.typed += "\n"; showRecording(); return; }
+  if (e.key === "Backspace" && !ctrl && recorder.typed && window.getSelection()?.isCollapsed) {
+    recorder.typed = Array.from(recorder.typed).slice(0, -1).join("");    // (Backspace right after typing: the last character)
+    showRecording();
+    return;
+  }
+  if (ctrl && (e.key === "Home" || e.key === "End")) {
+    recordLine(docCall("moveCaret", { to: e.key === "Home" ? "documentStart" : "documentEnd" }));
+    return;
+  }
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key) || (ctrl && e.key.toLowerCase() === "a")) {
+    if (recorder.typed) recordLine("");
+    recorder.moved = true;
+  } else if (e.key === "Backspace" || e.key === "Delete") {
+    recordLine("; " + ui.recordSkipped.replace("{0}", e.key));
+  }
+}, true);
+// A click in the document moves the caret or selects: noted where it happened.
+document.addEventListener("mousedown", (e) => {
+  if (!recorder.on || !(e.target instanceof Element) || !e.target.closest("#app [data-dxr-surface]")) return;
+  if (recorder.typed) recordLine("");
+  recorder.moved = true;
+}, true);
 
 // --- The command palette (Ctrl+Shift+P; the magnifier in the title bar; the Macros tab), as AhkWord's: type part of a
 // command's name and press Enter. It lists what the ribbon has, named and placed as the ribbon shows it (in the
@@ -882,7 +1087,7 @@ function paletteItems() {
         run: () => runControl(el, () => el.click()) });
     } else {
       // (the palette's own buttons; the Macros list, whose macros are listed one by one; the gear, File > Settings)
-      if (el.matches(".dax-palette-button, .dax-palettetab, .dax-macrobutton, .dax-settings")) continue;
+      if (el.matches(".dax-palette-button, .dax-palettetab, .dax-macrobutton, .dax-settings, .dax-recmark")) continue;
       const name = controlName(el);
       add({ key: "b:" + (id || name + "@" + placeOf(el)), name, where: placeOf(el), description: squash(el.title), keys: shortcutOf(el),
         on: el.classList.contains("dxr-on") || el.getAttribute("aria-pressed") === "true", off,
@@ -1228,6 +1433,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "pdf: " + ((await measureAsk("measurePdf", "pdf")) ? "ok" : "FAILED") });
       post({ type: "log", text: "numbering: " + (await numberingChecks()) });
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
+      post({ type: "log", text: "recording: " + (await recordingChecks()) });
       // Doc.ahk: tests\doc-check.ahk, a script of its own, drives the editor and logs what it found.
       post({ type: "log", text: "doc api: " + ({ true: "ok", false: "FAILED", null: "FAILED (no answer)" })[await measureAsk("measureDocScript", "docScript", 70000)] });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.
@@ -1246,6 +1452,17 @@ host?.addEventListener("message", async (e) => {
   }
 });
 
+// The palette (Ctrl+Shift+P) and recording (Ctrl+Shift+R): taken before the ribbon and the editor see the key (in the
+// capture phase), as the ribbon's own Ctrl+R (align right) and Ctrl+P would take them first.
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key !== "p" && key !== "r") return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (key === "p") openPalette(); else toggleRecording();
+}, true);
+
 // Keys a word processor has and the ribbon leaves to its host (the browser's own are off: dAHKxodus.cs). Ctrl+S and
 // Ctrl+O are the ribbon's while the focus is inside it; here they also work when it isn't (nothing focused yet).
 window.addEventListener("keydown", (e) => {
@@ -1259,7 +1476,6 @@ window.addEventListener("keydown", (e) => {
   else if (ctrl && !e.shiftKey && key === "o") message = "openRequest";
   else if (ctrl && !e.shiftKey && key === ",") message = "settingsRequest";
   else if (ctrl && !e.shiftKey && key === "p") message = "printRequest";
-  else if (ctrl && e.shiftKey && key === "p") { e.preventDefault(); openPalette(); return; }
   else if (ctrl && !e.shiftKey && key === "s") { e.preventDefault(); ribbon?.download(); return; }
   if (!message) return;
   e.preventDefault();
@@ -1301,23 +1517,30 @@ ribbon = mountRibbon("#app", {
   typingUndo: "word",    // Undo takes typing back a word at a time, as in Word (the engine answers natively, in ms)
   // Save (the button, Ctrl+S): the host writes the bytes to the document's file (asking where, the first time) and
   // answers savedOk, which marks the document saved; a cancelled or failed save leaves it changed.
+  // (a macro being recorded keeps the File commands that a script can repeat: Save, New, Print; the others as a note)
   onSave: (bytes, name) => {
     if (nativeBridge?.verifyReport) post({ type: "log", text: "verify: " + nativeBridge.verifyReport() });
+    recordLine("Doc.Save()");
     post({ type: "saved", name, b64: toB64(bytes) });
   },
   onDirtyChange: (dirty) => post({ type: "dirty", dirty }),
-  onNewRequest: () => post({ type: "newRequest" }),
-  onOpenRequest: () => post({ type: "openRequest" }),
-  onOpenRecent: (entry) => post({ type: "openRecent", path: entry.id }),
+  onNewRequest: () => { recordLine("Doc.New()"); post({ type: "newRequest" }); },
+  onOpenRequest: () => { recordLine("; " + ui.recordSkipped.replace("{0}", "Open")); post({ type: "openRequest" }); },
+  onOpenRecent: (entry) => { recordLine(`Doc.Open(${ahkValue(entry.id)})`); post({ type: "openRecent", path: entry.id }); },
   // The File menu (the File tab, Alt+F): Save As and the host's commands go to the host.
-  onSaveAsRequest: () => post({ type: "saveAsRequest" }),
+  onSaveAsRequest: () => { recordLine("; " + ui.recordSkipped.replace("{0}", "Save As")); post({ type: "saveAsRequest" }); },
   fileMenu: hostFileMenu(),
-  onFileMenu: (id) => post({ type: { settings: "settingsRequest", close: "closeRequest", print: "printRequest", pdf: "pdfRequest" }[id] ?? "fileMenu", id }),
+  onFileMenu: (id) => {
+    if (id === "print") recordLine("Doc.Print()");
+    else if (id === "pdf") recordLine("; " + ui.recordSkipped.replace("{0}", ui.pdf ?? "Export to PDF"));
+    post({ type: { settings: "settingsRequest", close: "closeRequest", print: "printRequest", pdf: "pdfRequest" }[id] ?? "fileMenu", id });
+  },
   onOpen: () => ribbon && addAhkButton(),
   // Scripts' Command event (a macro recorder's source later), and TextChanged after a command.
   onCommand: (label, ms, command) => {
     post({ type: "command", label, name: command?.name ?? "", ...(command ? { args: command.args } : {}) });
     textChanged();
+    if (recorder.on) recordCommand(label, command);
   },
 });
 // What the host asks: before it closes or replaces the document, and for scripts (Doc.ahk): an editor command by name

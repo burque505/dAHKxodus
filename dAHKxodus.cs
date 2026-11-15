@@ -12,6 +12,7 @@
 #load "host\Lang.cs"
 #load "host\SettingsDialog.cs"
 #load "host\Recovery.cs"
+#load "host\MacroDialog.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
 // args: [0] the AHK script's window (bridge calls go there as WM_COPYDATA), [1] the program folder,
@@ -316,6 +317,10 @@ class MainForm : Form {
         paletteOn = Lang.T("page.paletteOn"), paletteNotNow = Lang.T("page.paletteNotNow"), paletteFile = Lang.T("page.paletteFile"),
         paletteMacro = Lang.T("page.paletteMacro"), paletteTitleBar = Lang.T("page.paletteTitleBar"),
         paletteStatusBar = Lang.T("page.paletteStatusBar"), paletteNone = Lang.T("page.paletteNone"),
+        record = Lang.T("page.record"), recordTip = Lang.T("page.recordTip"), recordStop = Lang.T("page.recordStop"),
+        recording = Lang.T("page.recording"), nothingRecorded = Lang.T("page.nothingRecorded"),
+        recordHeader = Lang.T("page.recordHeader"), recordMoved = Lang.T("page.recordMoved"), recordSkipped = Lang.T("page.recordSkipped"),
+        macrosFolder = Lang.T("page.macrosFolder"), macroDeleteTip = Lang.T("page.macroDeleteTip"),
         ribbon = Lang.Ribbon(),
     });
 
@@ -672,6 +677,7 @@ class MainForm : Form {
                     CallAhk(CallTag, m.GetProperty("id").GetInt32(), Str("fn") + "\t" + Str("arg"));
                     break;
                 case "listMacros":    // the Macros tab's list is opening
+                    try { Macros.UpdateLib(Macros.UserFolder, dir); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                     Send(new { type = "macros", entries = Macros.List(dir) });
                     break;
                 case "runMacro":    // a macro from that list: dAHKxodus.ahk starts it, told this window (DAHKXODUS_HWND)
@@ -681,8 +687,27 @@ class MainForm : Form {
                         CallAhk(RunMacroTag, macroId, Str("path"));
                     } else Send(new { type = "ahkResult", id = macroId, result = "", error = Lang.T("macro.notFound", Str("path")) });
                     break;
+                case "deleteMacro":    // the Macros list, right-click: one of the user's own macros, after asking
+                    var doomed = Str("path");
+                    BeginInvoke(() => DeleteMacro(doomed));
+                    break;
+                case "openMacrosFolder":
+                    try {
+                        Directory.CreateDirectory(Macros.UserFolder);
+                        Macros.UpdateLib(Macros.UserFolder, dir);
+                        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{Macros.UserFolder}\"") { UseShellExecute = true });
+                    } catch (Exception ex) { Log("macros folder: " + ex.Message); }
+                    break;
                 case "measureDocScript":    // (measure runs) tests\doc-check.ahk drives this window through Doc.ahk
                     if (measureOut != "") _ = MeasureDocScript();
+                    break;
+                case "recorded":    // a macro recording stopped: its script, to name and save
+                    var recordedScript = Str("script");
+                    if (measureOut != "") MeasureRecorded(recordedScript);
+                    else BeginInvoke(() => SaveRecordedMacro(recordedScript));    // (the dialog runs its own loop)
+                    break;
+                case "measureRunRecorded":    // (measure runs) the recorded macro, replayed
+                    if (measureOut != "") CallAhk(RunMacroTag, 0, Path.Combine(dir, "logs", "measure-recorded.ahk"));
                     break;
                 case "command":    // a ribbon command ran (onCommand): scripts' Command event
                     if (Subscribed("Command"))
@@ -1070,6 +1095,69 @@ class MainForm : Form {
         }
     }
 
+    // ---- Recorded macros
+
+    // The recording's script: named and saved in the user's Macros folder (the program's may be read-only), where the
+    // Macros tab lists it. The user may change the script first, or discard it.
+    void SaveRecordedMacro(string script) {
+        if (asking) return;
+        string name;
+        asking = true;
+        try {
+            using var dlg = new MacroDialog(Macros.UniqueName(Lang.T("macro.defaultName")), script);
+            if (dlg.ShowDialog(this) != DialogResult.OK) { SendStatus(Lang.T("macro.discarded")); return; }
+            name = dlg.MacroName;
+            script = dlg.Script;
+            var path = Macros.UserPath(name);
+            if (File.Exists(path) && MessageBox.Show(this, Lang.T("macro.replace", name), "dAHKxodus",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) {
+                SendStatus(Lang.T("macro.notSaved"));
+                return;
+            }
+            Macros.Save(path, script, dir);
+            Log($"macro recorded: {Path.GetFileName(path)} ({script.Split('\n').Length} lines)");
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Log("macro not saved: " + ex.Message);
+            MessageBox.Show(this, Lang.T("macro.saveFailed", ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        } finally { asking = false; }
+        SendStatus(Lang.T("macro.saved", name));
+    }
+
+    // A macro of the user's (not one that came with the program), to the Recycle Bin once the user says yes.
+    void DeleteMacro(string path) {
+        if (asking) return;
+        var name = Path.GetFileNameWithoutExtension(path);
+        var mine = Macros.List(dir).Any(m => m.user && string.Equals(m.path, path, StringComparison.OrdinalIgnoreCase));
+        if (!mine) { SendStatus(Lang.T("macro.notYours", name)); return; }
+        asking = true;
+        try {
+            if (MessageBox.Show(this, Lang.T("macro.deleteAsk", name), "dAHKxodus", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try {
+                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) {
+                Log("macro not deleted: " + ex.Message);
+                return;
+            }
+        } finally { asking = false; }
+        Log("macro deleted: " + Path.GetFileName(path));
+        SendStatus(Lang.T("macro.deleted", name));
+        Send(new { type = "macros", entries = Macros.List(dir) });
+    }
+
+    // (Measure runs) The recording goes to logs\measure-recorded.ahk, no dialog; measureRunRecorded replays it.
+    void MeasureRecorded(string script) {
+        var path = Path.Combine(dir, "logs", "measure-recorded.ahk");
+        var ok = false;
+        try {
+            Macros.Save(path, script, dir);
+            ok = true;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log("measure: recorded macro not written: " + ex.Message); }
+        Log($"measure: recorded macro {(ok ? "written" : "FAILED")}: {script.Replace("\r\n", "\n").Replace("\n", " | ")}");
+        Send(new { type = "measureReply", what = "recorded", ok });
+    }
+
     // (Measure runs) tests\doc-check.ahk drives this window through Doc.ahk and says how it went (measureDone).
     TaskCompletionSource<bool>? measureDocDone;
     async Task MeasureDocScript() {
@@ -1085,16 +1173,49 @@ class MainForm : Form {
 // The Macros tab's list: the .ahk files in the program's macros folder and in the user's (Macros beside
 // settings.ini), each with its first comment line as its tip.
 static class Macros {
-    public record Entry(string path, string label, string title);
+    /// user: one of the user's own (their Macros folder), which they may delete from the list.
+    public record Entry(string path, string label, string title, bool user);
 
     public static List<Entry> List(string programFolder) {
         var list = new List<Entry>();
-        foreach (var folder in new[] { Path.Combine(programFolder, "macros"), Path.Combine(AppFolders.Roaming, "Macros") }) {
+        foreach (var (folder, user) in new[] { (Path.Combine(programFolder, "macros"), false), (UserFolder, true) }) {
             if (!Directory.Exists(folder)) continue;
             foreach (var file in Directory.EnumerateFiles(folder, "*.ahk").Order(StringComparer.OrdinalIgnoreCase))
-                list.Add(new Entry(file, Path.GetFileNameWithoutExtension(file), Tip(file)));
+                list.Add(new Entry(file, Path.GetFileNameWithoutExtension(file), Tip(file), user));
         }
         return list;
+    }
+
+    /// The user's own macros: recorded ones are saved here (Macros beside settings.ini).
+    public static string UserFolder => Path.Combine(AppFolders.Roaming, "Macros");
+
+    public static string UserPath(string name) => Path.Combine(UserFolder, name + ".ahk");
+
+    /// "Recorded macro 3": the first number not taken in the user's folder.
+    public static string UniqueName(string stem) {
+        for (var i = 1; ; i++)
+            if (!File.Exists(UserPath($"{stem} {i}"))) return $"{stem} {i}";
+    }
+
+    /// Writes a macro (CRLF, UTF-8 without BOM), and beside it Lib\Doc.ahk, a copy of the program's, so its
+    /// `#Include <Doc>` finds Doc.ahk wherever the program is (AutoHotkey looks in the script's Lib folder first).
+    public static void Save(string path, string script, string programFolder) {
+        var folder = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        Directory.CreateDirectory(folder);
+        UpdateLib(folder, programFolder);
+        File.WriteAllText(path, script.Replace("\r\n", "\n").Replace("\n", "\r\n"), new System.Text.UTF8Encoding(false));
+    }
+
+    /// Keeps <folder>\Lib\Doc.ahk the same as the program's Doc.ahk (a newer dAHKxodus may have changed it).
+    public static void UpdateLib(string folder, string programFolder) {
+        var source = Path.Combine(programFolder, "Doc.ahk");
+        if (!File.Exists(source) || !Directory.Exists(folder)) return;
+        var lib = Path.Combine(folder, "Lib");
+        var copy = Path.Combine(lib, "Doc.ahk");
+        var bytes = File.ReadAllBytes(source);
+        if (File.Exists(copy) && File.ReadAllBytes(copy).AsSpan().SequenceEqual(bytes)) return;
+        Directory.CreateDirectory(lib);
+        File.WriteAllBytes(copy, bytes);
     }
 
     static string Tip(string file) {
