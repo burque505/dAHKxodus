@@ -48,21 +48,37 @@ static class VsHost
 		return Environment.CurrentDirectory;
 	}
 
-	/// AutoHotkey v2 (64-bit): DAHKXODUS_AUTOHOTKEY, else the one beside dAHKxodus.exe (an installed copy), else where
-	/// its own installer registers it, else its usual place; "" if not found.
+	/// AutoHotkey v2 (64-bit): DAHKXODUS_AUTOHOTKEY, else the one beside dAHKxodus.exe (the full installer's copy), else
+	/// the one named in AutoHotkey.path beside it (the light installer's: the AutoHotkey64.exe the user located, one
+	/// line, UTF-8), else where its own installer registers it, else its usual place, else on PATH (a Microsoft Store
+	/// AutoHotkey's command alias); "" if not found.
 	static string FindAutoHotkey()
 	{
 		var named = Environment.GetEnvironmentVariable("DAHKXODUS_AUTOHOTKEY");
 		if (!string.IsNullOrEmpty(named) && File.Exists(named)) return named;
 		string beside = Path.Combine(AppContext.BaseDirectory, "AutoHotkey64.exe");
 		if (File.Exists(beside)) return beside;
+		try {
+			string pathFile = Path.Combine(AppContext.BaseDirectory, "AutoHotkey.path");
+			if (File.Exists(pathFile)) {
+				string located = File.ReadAllText(pathFile, System.Text.Encoding.UTF8).Trim().Trim('"');
+				if (located != "" && File.Exists(located)) return located;
+			}
+		} catch (Exception) { }    // (unreadable: the other places)
 		foreach (var hive in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine }) {
 			using var key = hive.OpenSubKey(@"SOFTWARE\AutoHotkey");
 			if (key?.GetValue("InstallDir") is string dir && File.Exists(Path.Combine(dir, "v2", "AutoHotkey64.exe")))
 				return Path.Combine(dir, "v2", "AutoHotkey64.exe");
 		}
 		string usual = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AutoHotkey", "v2", "AutoHotkey64.exe");
-		return File.Exists(usual) ? usual : "";
+		if (File.Exists(usual)) return usual;
+		foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries)) {
+			try {
+				string onPath = Path.Combine(dir.Trim().Trim('"'), "AutoHotkey64.exe");
+				if (File.Exists(onPath)) return onPath;
+			} catch (Exception) { }    // (a malformed PATH entry)
+		}
+		return "";
 	}
 
 	/// The bridge's AutoHotkey side. dAHKxodus works without it (the bridge's calls then answer with an error).

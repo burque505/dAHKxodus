@@ -29,3 +29,11 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
 - [ ] **9. Text boxes:** editing in them, then inserting and moving them
 
 Alongside every milestone: faster opening of long documents, and the fork kept level with Docxodus itself.
+
+## Smaller downloads
+
+The light installer leaves out .NET and AutoHotkey, but the editor itself is still about 36 MB before compression,
+32 MB of it the WebAssembly build of Docxodus's engine. dAHKxodus edits through the native engine, so the page uses the
+WebAssembly only for a few rarely used functions, yet loads it at every start. In the fork: make the WebAssembly
+optional, loaded only when one of those functions is used (or not shipped at all once the native engine covers them).
+That would shrink both installers and speed up the start.
