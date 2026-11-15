@@ -280,15 +280,23 @@ async function editChecks() {
 const savedOkWaiters = [];
 
 // (Measure runs) A question to the host, answered by "measureReply" with the same `what`: true, false, or null after
-// 20 s without an answer.
+// 20 s (or `wait` ms) without an answer.
 const measureWaiters = new Map();
-function measureAsk(type, what) {
+function measureAsk(type, what, wait = 20000) {
   return new Promise((resolve) => {
     measureWaiters.set(what, resolve);
-    setTimeout(() => { if (measureWaiters.delete(what)) resolve(null); }, 20000);
+    setTimeout(() => { if (measureWaiters.delete(what)) resolve(null); }, wait);
     post({ type });
   });
 }
+
+// Scripts' TextChanged event (Doc.ahk): when typing pauses, and after a command.
+let textChangedTimer = 0;
+function textChanged() {
+  clearTimeout(textChangedTimer);
+  textChangedTimer = setTimeout(() => post({ type: "textChanged" }), 300);
+}
+document.addEventListener("input", (e) => { if (e.target?.closest?.("#app [data-anchor]")) textChanged(); }, true);
 
 // --- The recovery copy (the host's autosave): the document's bytes as Save would write them, without saving. Not in
 // the middle of a word: the editor commits typing for them, so this waits until typing has paused (1.5 s, at most
@@ -602,13 +610,22 @@ const hostFileMenu = () => [
   { id: "settings", label: ui.settings, title: ui.settingsTip, shortcut: "Ctrl+,", separatorBefore: true },
   { id: "close", label: ui.close, title: ui.closeTip, separatorBefore: true },
 ];
-// The macros on the Macros tab: AutoHotkey functions (class Bridge in dAHKxodus.ahk) whose answer is typed at the
-// caret. (One for now; a list, as AhkWord's macros gallery, so more can join it.)
+// The macros on the Macros tab: an AutoHotkey function (class Bridge in dAHKxodus.ahk) whose answer is typed at the
+// caret, then the scripts in the macros folders (the host lists them each time the list opens: "macros"), which
+// dAHKxodus.ahk starts and which drive the editor through Doc.ahk.
+let macroFiles = [];
+let renderMacroMenu = () => {};    // (addMacrosTab's: draws the open list again)
 const macros = () => [
   { fn: "LegalDate", label: ui.ahk, title: ui.ahkTip },
+  ...macroFiles.map((m, i) => ({ path: m.path, label: m.label, title: m.title || m.path, separatorBefore: i === 0 })),
 ];
-function runMacro(fn) {
-  insertFromAhk(fn).catch((e) => ribbon.setStatus("AHK: " + e.message));
+function runMacro(m) {
+  if (m.fn) { insertFromAhk(m.fn).catch((e) => ribbon.setStatus("AHK: " + e.message)); return; }
+  new Promise((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject });
+    post({ type: "runMacro", id, path: m.path });
+  }).catch((e) => ribbon.setStatus("AHK: " + e.message));
 }
 
 function labelButtons() {
@@ -668,9 +685,8 @@ function addMacrosTab() {
   const button = panel.querySelector(".dax-macrobutton");
   const close = () => { menu.removeAttribute("data-open"); button.setAttribute("aria-expanded", "false"); };
   button.addEventListener("mousedown", (e) => e.preventDefault());
-  button.addEventListener("click", () => {
-    if (menu.hasAttribute("data-open")) { close(); return; }
-    menu.replaceChildren(...macros().map((m) => {
+  renderMacroMenu = () => {
+    menu.replaceChildren(...macros().flatMap((m) => {
       const item = document.createElement("button");
       item.type = "button";
       item.setAttribute("role", "menuitem");
@@ -678,9 +694,18 @@ function addMacrosTab() {
       item.innerHTML = "<span></span>";
       item.firstChild.textContent = m.label;
       item.addEventListener("mousedown", (e) => e.preventDefault());
-      item.addEventListener("click", () => { close(); runMacro(m.fn); });
-      return item;
+      item.addEventListener("click", () => { close(); runMacro(m); });
+      if (!m.separatorBefore) return [item];
+      const sep = document.createElement("div");
+      sep.className = "dxr-filesep";
+      sep.setAttribute("role", "separator");
+      return [sep, item];
     }));
+  };
+  button.addEventListener("click", () => {
+    if (menu.hasAttribute("data-open")) { close(); return; }
+    post({ type: "listMacros" });    // (the host answers "macros": the list is drawn again with what it found)
+    renderMacroMenu();
     const r = button.getBoundingClientRect();
     menu.style.left = `${Math.round(r.left)}px`;
     menu.style.top = `${Math.round(r.bottom + 4)}px`;
@@ -795,6 +820,10 @@ host?.addEventListener("message", async (e) => {
       addAhkButton();
       applyView(savedView); caretAtStart(); relabel();
       reportView();
+      post({ type: "blankOpened" });
+    } else if (m.type === "macros") {
+      macroFiles = m.entries ?? [];
+      if (document.querySelector(".dax-macromenu[data-open]")) renderMacroMenu();
     } else if (m.type === "preparePrint") {
       preparePrint(m.id);
     } else if (m.type === "printDone") {
@@ -866,6 +895,8 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "pdf: " + ((await measureAsk("measurePdf", "pdf")) ? "ok" : "FAILED") });
       post({ type: "log", text: "numbering: " + (await numberingChecks()) });
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
+      // Doc.ahk: tests\doc-check.ahk, a script of its own, drives the editor and logs what it found.
+      post({ type: "log", text: "doc api: " + ({ true: "ok", false: "FAILED", null: "FAILED (no answer)" })[await measureAsk("measureDocScript", "docScript", 70000)] });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.
       const bridge = ribbon.exports?.DocxSessionBridge, handle = ribbon.editor?.handle;
       if (bridge?.GetVersion && typeof handle === "number") {
@@ -949,9 +980,28 @@ ribbon = mountRibbon("#app", {
   fileMenu: hostFileMenu(),
   onFileMenu: (id) => post({ type: { settings: "settingsRequest", close: "closeRequest", print: "printRequest", pdf: "pdfRequest" }[id] ?? "fileMenu", id }),
   onOpen: () => ribbon && addAhkButton(),
+  // Scripts' Command event (a macro recorder's source later), and TextChanged after a command.
+  onCommand: (label, ms, command) => {
+    post({ type: "command", label, name: command?.name ?? "", ...(command ? { args: command.args } : {}) });
+    textChanged();
+  },
 });
-// What the host asks before it closes or replaces the document.
-window.dax = { isDirty: () => !!ribbon?.isDirty };
+// What the host asks: before it closes or replaces the document, and for scripts (Doc.ahk): an editor command by name
+// as the ribbon runs it (the rail and onCommand see it), and the list of them.
+window.dax = {
+  isDirty: () => !!ribbon?.isDirty,
+  exec: (name, args) => {
+    try {
+      const result = ribbon.exec(name, args ?? {});
+      return { result: result === undefined ? null : result };
+    } catch (err) {
+      return { error: String(err?.message ?? err), code: err?.code ?? "error" };
+    }
+  },
+  // (each command's argument names in their order: an AutoHotkey object lists its keys sorted, so Doc.ahk maps
+  // positional arguments by this)
+  commands: () => ribbon.commands().map((c) => ({ ...c, order: Object.keys(c.args) })),
+};
 addOpenAsync(ribbon);
 ribbon.loader.stage(0);
 // The WASM runtime still starts (~200 ms): the session bridge is the host's, but the rest of the exports (the

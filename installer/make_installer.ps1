@@ -8,7 +8,7 @@
 #          .NET and to locate AutoHotkey64.exe (AutoHotkey.path) or get it from the Microsoft Store.
 # With -Publish it puts them on GitHub as the pre-release "dAHKxodus <version> (installer preview)" (tag installer-<version>).
 # Both carry dAHKxodus.exe built by vs\dAHKxodus.csproj from the same sources dAHKxodus.ahk runs (ReadyToRun), the editor
-# (web\: index.html and the Docxodus package docxodus.lock names), lang\, the licenses, and dAHKxodus.ahk (the bridge).
+# (web\: index.html and the Docxodus package docxodus.lock names), lang\, the licenses, dAHKxodus.ahk (the bridge), Doc.ahk and macros\.
 #   .\installer\make_installer.ps1             both editions, from the last commit (uncommitted changes are left out)
 #   -Edition Full | Light                      only one
 #   -Working                                   from the working tree as it is (named ...-working; for trying it out)
@@ -132,12 +132,12 @@ try {
 		# the .cs sources, tests, samples and build scripts stay in the repository)
 		$folder = Join-Path $work "dAHKxodus-$ed"
 		Copy-Item $pubDir $folder -Recurse
-		foreach ($own in "dAHKxodus.ahk", "Csharp-in-AHK.ahk", "LICENSE", "README.md", "ROADMAP.md", "THIRD-PARTY-NOTICES.md") {
+		foreach ($own in "dAHKxodus.ahk", "Doc.ahk", "Csharp-in-AHK.ahk", "LICENSE", "README.md", "ROADMAP.md", "THIRD-PARTY-NOTICES.md") {
 			$to = Join-Path $folder $own
 			if (Test-Path $to) { throw "dAHKxodus.exe's file $own has the name of one of dAHKxodus's own files." }
 			Copy-Item (Join-Path $src $own) $to
 		}
-		foreach ($dir in "lang", "licenses") { Copy-Item (Join-Path $src $dir) (Join-Path $folder $dir) -Recurse }
+		foreach ($dir in "lang", "licenses", "macros") { Copy-Item (Join-Path $src $dir) (Join-Path $folder $dir) -Recurse }
 		New-Item -ItemType Directory -Force (Join-Path $folder "web") | Out-Null
 		foreach ($own in "index.html", "ribbon-open-async.js") { Copy-Item (Join-Path $src "web\$own") (Join-Path $folder "web\$own") }
 		# the editor package, without its source maps and type declarations (11 MB the page never loads)

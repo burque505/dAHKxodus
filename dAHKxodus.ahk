@@ -1,9 +1,11 @@
 #Requires AutoHotkey v2.0 64-bit
 #SingleInstance Off
 #Include "Csharp-in-AHK.ahk"
+#Include "Doc.ahk"
 ; dAHKxodus: Docxodus's browser editor (web\index.html, npm package docxodus) in a WebView2 window
 ; (dAHKxodus.cs) hosted by this script. The editor calls AutoHotkey functions through a bridge: the methods of
-; class Bridge below (the Macros tab's "Insert legal date" calls Bridge.LegalDate).
+; class Bridge below (the Macros tab's "Insert legal date" calls Bridge.LegalDate). They may use Doc (Doc.ahk) to
+; drive the editor; so do the macros in the macros folder, which this script starts for the Macros tab.
 ;
 ; Usage:  AutoHotkey64.exe dAHKxodus.ahk [file.docx] [/measure out.docx]
 ;   /measure: open the file, put the caret at the end of the first paragraph, call LegalDate through the bridge,
@@ -22,27 +24,48 @@ Persistent
 OnMessage(0x004A, BridgeReceive)        ; WM_COPYDATA: a call from the editor
 OnMessage(0x8001, (*) => ExitApp())     ; the editor's window has closed
 
-; A call: dwData "DAX1", text "Function`targument"; the answer goes back to the editor's window (wParam) as
-; WM_COPYDATA "DAX2" (the result) or "DAX3" (an error message), before this returns.
+; From the editor's window (wParam): a call, dwData "DAX1", text "id`tFunction`targument", or a macro to start,
+; "DAX7", text "id`tpath". Taken at once (the window goes on), and run in a thread of its own, so a function may use
+; Doc, which waits for that window; the answer goes back as WM_COPYDATA "DAX2" ("id`tresult") or "DAX3" ("id`terror").
 BridgeReceive(wParam, lParam, msg, hwnd) {
-    if NumGet(lParam, 0, "uptr") != 0x44415831
+    tag := NumGet(lParam, 0, "uptr")
+    if tag != 0x44415831 && tag != 0x44415837
         return
-    text := StrGet(NumGet(lParam, 16, "ptr"), NumGet(lParam, 8, "uint") // 2, "UTF-16")
-    parts := StrSplit(RTrim(text, Chr(0)), "`t", , 2)
-    try {
-        if !Bridge.HasMethod(parts[1])
-            throw Error("No AutoHotkey bridge function " parts[1])
-        result := String(Bridge.%parts[1]%(parts.Length > 1 ? parts[2] : ""))
-        tag := 0x44415832
-    } catch as e {
-        result := e.Message, tag := 0x44415833
-    }
-    cds := Buffer(24, 0)
-    NumPut("uptr", tag, cds, 0)
-    NumPut("uint", (StrLen(result) + 1) * 2, cds, 8)
-    NumPut("ptr", StrPtr(result), cds, 16)
-    DllCall("SendMessageW", "ptr", wParam, "uint", 0x004A, "ptr", A_ScriptHwnd, "ptr", cds.Ptr)
+    text := RTrim(StrGet(NumGet(lParam, 16, "ptr"), NumGet(lParam, 8, "uint") // 2, "UTF-16"), Chr(0))
+    Doc.Window := wParam    ; (this script's Doc calls go to that window)
+    SetTimer(BridgeRun.Bind(wParam, tag, text), -1)
     return 1
+}
+
+BridgeRun(editor, tag, text) {
+    parts := StrSplit(text, "`t", , 3)
+    id := parts[1]
+    try {
+        if tag = 0x44415837 {
+            ; a macro: its own AutoHotkey process, told which window to drive (Doc.ahk reads DAHKXODUS_HWND)
+            path := parts[2]
+            if !FileExist(path)
+                throw Error("No macro " path)
+            SplitPath(path, , &folder)
+            EnvSet("DAHKXODUS_HWND", editor)
+            Run('"' A_AhkPath '" "' path '"', folder)
+            result := ""
+        } else {
+            if !Bridge.HasMethod(parts[2])
+                throw Error("No AutoHotkey bridge function " parts[2])
+            result := String(Bridge.%parts[2]%(parts.Length > 2 ? parts[3] : ""))
+        }
+        answer := 0x44415832
+    } catch as e {
+        result := e.Message, answer := 0x44415833
+    }
+    reply := id "`t" result
+    cds := Buffer(24, 0)
+    NumPut("uptr", answer, cds, 0)
+    NumPut("uint", (StrLen(reply) + 1) * 2, cds, 8)
+    NumPut("ptr", StrPtr(reply), cds, 16)
+    DllCall("SendMessageTimeoutW", "ptr", editor, "uint", 0x004A, "ptr", A_ScriptHwnd, "ptr", cds.Ptr,
+        "uint", 2, "uint", 10000, "ptr*", 0)    ; (SMTO_ABORTIFHUNG)
 }
 
 ; dAHKxodus.exe (vs\dAHKxodus.csproj) is the program and starts this script beside it as the bridge's AutoHotkey side:
@@ -51,6 +74,7 @@ BridgeReceive(wParam, lParam, msg, hwnd) {
 ; posts WM_APP + 1 as it closes; the timer catches a window that ended without saying so).
 if A_Args.Length >= 2 && A_Args[1] = "/companion" {
     Editor := A_Args[2] + 0
+    Doc.Window := Editor
     cds := Buffer(24, 0)
     NumPut("uptr", 0x44415830, cds, 0)
     DetectHiddenWindows(true)

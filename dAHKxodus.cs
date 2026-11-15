@@ -23,6 +23,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -70,15 +71,20 @@ class MainForm : Form {
         } catch { }
     }
 
-    const int WM_COPYDATA = 0x004A;
-    // "DAX0" (the companion's hello), "DAX1" (a call), "DAX2", "DAX3" (its answer, its error)
-    const long Hello = 0x44415830, CallTag = 0x44415831, ReplyOk = 0x44415832, ReplyError = 0x44415833;
+    const int WM_COPYDATA = 0x004A, SMTO_ABORTIFHUNG = 2;
+    // With dAHKxodus.ahk: "DAX0" (the companion's hello), "DAX1" (a call to a Bridge function: "id\tfn\targ"),
+    // "DAX2", "DAX3" (its answer, its error: "id\ttext"), "DAX7" (run a macro: "id\tpath"; answered as DAX1 is).
+    // With any script (Doc.ahk): "DAX4" (a call, JSON {id, name, args}), "DAX5" (its answer, JSON {id, result} or
+    // {id, error, code}), "DAX6" (an event, JSON {event, ...}).
+    const long Hello = 0x44415830, CallTag = 0x44415831, ReplyOk = 0x44415832, ReplyError = 0x44415833,
+        DocCall = 0x44415834, DocReply = 0x44415835, DocEvent = 0x44415836, RunMacroTag = 0x44415837;
     static string Untitled => Lang.T("file.untitled");
 
     [StructLayout(LayoutKind.Sequential)]
     struct COPYDATASTRUCT { public IntPtr dwData; public int cbData; public IntPtr lpData; }
 
     [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")]
     static extern IntPtr SendMessageTimeoutW(IntPtr hWnd, int msg, IntPtr wParam, ref COPYDATASTRUCT lParam,
         int flags, int timeout, out IntPtr result);
@@ -90,8 +96,6 @@ class MainForm : Form {
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     readonly EngineHost Engine = new();
     readonly Stopwatch clock = Stopwatch.StartNew();
-    string? reply;
-    bool replyIsError;
 
     // The document: its file ("" until it is saved), and whether it has changed since (the page's ribbon says).
     string current;
@@ -99,7 +103,7 @@ class MainForm : Form {
     bool closeConfirmed;    // the user has answered the ask-to-save question; the next Close goes through
     bool asking;            // a question or a file dialog is up: another request waits its turn
     // Saves the host asked the page for (the page answers "saved" with the id): Save or Save As, and who waits.
-    readonly Dictionary<int, (bool saveAs, TaskCompletionSource<bool> done)> pendingSaves = new();
+    readonly Dictionary<int, (bool saveAs, string? target, TaskCompletionSource<bool> done)> pendingSaves = new();
     int nextSave;
     // The page's view as it last reported it ("view"): settings.ini's [View] when the window closes.
     Dictionary<string, string>? view;
@@ -335,6 +339,7 @@ class MainForm : Form {
 
     protected override void OnFormClosed(FormClosedEventArgs e) {
         autosaveTimer.Stop();
+        RaiseEvent("Closed");
         // Closed as the user chose (saved, or Don't Save): the copy goes. Closed by Windows shutting down, nobody was
         // asked: a document with changes keeps its copy, which the next start offers.
         if (closeReason != CloseReason.WindowsShutDown || !Changed) ClearRecovery();
@@ -357,15 +362,16 @@ class MainForm : Form {
 
     // ---- Opening
 
-    void OpenFile(string path) {
+    // False when the file can't be read (the user is told, unless quiet); else the page is opening it.
+    bool OpenFile(string path, bool quiet = false) {
         byte[] bytes;
         try {
             bytes = File.ReadAllBytes(path);
         } catch (Exception ex) {
             Log($"open {path} failed: {ex.Message}");
-            if (measureOut == "") MessageBox.Show(this, Lang.T("file.openFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (measureOut == "" && !quiet) MessageBox.Show(this, Lang.T("file.openFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
             if (ex is FileNotFoundException or DirectoryNotFoundException) { RecentFiles.Remove(path); SendRecent(); }
-            return;
+            return false;
         }
         current = Path.GetFullPath(path);
         dirty = recovered = false;
@@ -374,10 +380,15 @@ class MainForm : Form {
         if (measureOut == "") { RecentFiles.Add(current); SendRecent(); }
         Log($"open {Path.GetFileName(path)} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
         Send(new { type = "open", name = Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
+        return true;
     }
 
     async void NewDocument() {
         if (!await CanDiscard()) return;
+        StartBlank();
+    }
+
+    void StartBlank() {
         current = "";
         dirty = recovered = false;
         ClearRecovery();
@@ -408,11 +419,12 @@ class MainForm : Form {
 
     // ---- Saving
 
-    // Asks the page for the document's bytes (it answers "saved" with the id); true once they are written.
-    Task<bool> SaveAsync(bool saveAs) {
+    // Asks the page for the document's bytes (it answers "saved" with the id); true once they are written. A target
+    // (a script's Doc.Save(path)) is written without asking where.
+    Task<bool> SaveAsync(bool saveAs, string? target = null) {
         var id = ++nextSave;
         var done = new TaskCompletionSource<bool>();
-        pendingSaves[id] = (saveAs, done);
+        pendingSaves[id] = (saveAs, target, done);
         Send(new { type = "save", id });
         return done.Task;
     }
@@ -420,16 +432,18 @@ class MainForm : Form {
     // The page's bytes for Save (Ctrl+S, the ribbon's Save), or for a save the host asked for (id).
     void OnSaved(byte[] bytes, int id) {
         var saveAs = false;
+        string? target = null;
         TaskCompletionSource<bool>? done = null;
-        if (id != 0 && pendingSaves.Remove(id, out var pending)) (saveAs, done) = pending;
-        var ok = WriteDocument(bytes, saveAs);
+        if (id != 0 && pendingSaves.Remove(id, out var pending)) (saveAs, target, done) = pending;
+        var ok = WriteDocument(bytes, saveAs, target);
         done?.TrySetResult(ok);
     }
 
-    bool WriteDocument(byte[] bytes, bool saveAs) {
+    bool WriteDocument(byte[] bytes, bool saveAs, string? target = null) {
         var path = current;
         // A measure run never writes over the document it opened, nor asks where: its saves go beside its copy.
-        if (measureOut != "") path = Path.ChangeExtension(measureOut, ".host.docx");
+        if (target != null) path = target;
+        else if (measureOut != "") path = Path.ChangeExtension(measureOut, ".host.docx");
         else if (saveAs || path == "") {
             asking = true;
             try {
@@ -458,6 +472,8 @@ class MainForm : Form {
         dirty = recovered = false;
         ClearRecovery();    // (saved: nothing left to recover)
         UpdateTitle();
+        RaiseEvent("Saved", new JsonObject { ["path"] = current });
+        ReportModified();
         return true;
     }
 
@@ -542,12 +558,19 @@ class MainForm : Form {
                 case "opened":
                     Log($"opened {clock.ElapsedMilliseconds} ms (window {Environment.GetEnvironmentVariable("DAHKXODUS_WINDOW") ?? "default"}; open {Str("open")} ms: first window after {Str("firstWindow")} ms, longest frozen {Str("longestGap")} ms; first paint {Str("paint")} ms, {Str("blocks")} blocks)");
                     if (recovering != null) RecoveredOpen();
-                    if (measureOut != "") Send(new { type = "measure" });
+                    if (measureOut != "" && !measureStarted) { measureStarted = true; Send(new { type = "measure" }); }
+                    DocumentReady(true);
+                    break;
+                case "blankOpened":    // a new document (New, or a start without one) is in the editor
+                    DocumentReady(true);
                     break;
                 case "openFailed":
                     Log("open failed in the page: " + Str("error"));
                     if (recovering != null) { recovering = null; recovered = false; }    // (its copy stays for next time)
-                    MessageBox.Show(this, Lang.T("file.openFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    var scriptOpen = documentWait != null;
+                    documentWait?.TrySetResult(false);
+                    documentWait = null;
+                    if (!scriptOpen) MessageBox.Show(this, Lang.T("file.openFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     current = "";
                     UpdateTitle();
                     Send(new { type = "blank", name = Untitled });
@@ -558,7 +581,7 @@ class MainForm : Form {
                     var ahkInfo = m.GetProperty("ahk");
                     Log($"measured: AHK returned \"{ahkInfo.GetProperty("text")}\" in {ahkInfo.GetProperty("roundTrip")} ms; save {Str("save")} ms, {bytes.Length:N0} bytes");
                     closeConfirmed = true;
-                    Close();
+                    BeginInvoke(Close);    // (not inside the page's message: scripts are told Closed)
                     break;
                 case "saved":
                     OnSaved(Convert.FromBase64String(Str("b64")), m.TryGetProperty("id", out var sid) && sid.ValueKind == JsonValueKind.Number ? sid.GetInt32() : 0);
@@ -618,6 +641,7 @@ class MainForm : Form {
                     dirty = Str("dirty") == "True" || Str("dirty") == "true";
                     UpdateTitle();
                     if (measureOut != "") Log($"measure: page says {(dirty ? "changed" : "unchanged")}, title \"{Text}\"");
+                    ReportModified();
                     break;
                 case "newRequest":
                     NewDocument();
@@ -640,11 +664,31 @@ class MainForm : Form {
                         .FirstOrDefault(p => p.EndsWith(".docx", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".docm", StringComparison.OrdinalIgnoreCase));
                     if (dropped != null) { Activate(); OpenPath(dropped); }
                     break;
-                case "ahk":
-                    var result = CallAhk(Str("fn"), Str("arg"));
-                    Send(replyIsError
-                        ? new { type = "ahkResult", id = m.GetProperty("id").GetInt32(), result = "", error = result }
-                        : (object)new { type = "ahkResult", id = m.GetProperty("id").GetInt32(), result, error = "" });
+                case "ahk":    // a Bridge function in dAHKxodus.ahk; its answer comes later (WndProc: ahkResult)
+                    CallAhk(CallTag, m.GetProperty("id").GetInt32(), Str("fn") + "\t" + Str("arg"));
+                    break;
+                case "listMacros":    // the Macros tab's list is opening
+                    Send(new { type = "macros", entries = Macros.List(dir) });
+                    break;
+                case "runMacro":    // a macro from that list: dAHKxodus.ahk starts it, told this window (DAHKXODUS_HWND)
+                    var macroId = m.GetProperty("id").GetInt32();
+                    if (Macros.List(dir).Any(x => string.Equals(x.path, Str("path"), StringComparison.OrdinalIgnoreCase))) {
+                        Log("macro: " + Path.GetFileName(Str("path")));
+                        CallAhk(RunMacroTag, macroId, Str("path"));
+                    } else Send(new { type = "ahkResult", id = macroId, result = "", error = Lang.T("macro.notFound", Str("path")) });
+                    break;
+                case "measureDocScript":    // (measure runs) tests\doc-check.ahk drives this window through Doc.ahk
+                    if (measureOut != "") _ = MeasureDocScript();
+                    break;
+                case "command":    // a ribbon command ran (onCommand): scripts' Command event
+                    if (Subscribed("Command"))
+                        RaiseEvent("Command", new JsonObject {
+                            ["command"] = Str("name"), ["label"] = Str("label"),
+                            ["args"] = m.TryGetProperty("args", out var ca) && ca.ValueKind == JsonValueKind.Object ? JsonNode.Parse(ca.GetRawText()) : new JsonObject(),
+                        });
+                    break;
+                case "textChanged":    // typing paused, or a command changed the document: scripts' TextChanged event
+                    RaiseEvent("TextChanged");
                     break;
                 case "log":
                     Log("page: " + Str("text"));
@@ -693,8 +737,11 @@ class MainForm : Form {
     }
 
     // File > Export to PDF: asks where (the document's name and folder to start), writes the PDF, puts the view back.
-    async void ExportPdf(string? path = null) {
-        if (asking || web.CoreWebView2 == null) return;
+    async void ExportPdf(string? path = null) => await ExportPdfAsync(path);
+
+    // Quiet (a script's Doc.ExportPdf): no message, no measure check; the result says whether the PDF was written.
+    async Task<bool> ExportPdfAsync(string? path, bool quiet = false) {
+        if (asking || web.CoreWebView2 == null) return false;
         if (path == null) {
             asking = true;
             try {
@@ -702,7 +749,7 @@ class MainForm : Form {
                     Filter = Lang.T("file.filterPdf"), FileName = Path.ChangeExtension(DocName, ".pdf"), OverwritePrompt = true, AddExtension = true,
                     InitialDirectory = current != "" ? Path.GetDirectoryName(current) : "",
                 };
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                if (dlg.ShowDialog(this) != DialogResult.OK) return false;
                 path = dlg.FileName;
             } finally { asking = false; }
         }
@@ -731,9 +778,11 @@ class MainForm : Form {
         } finally {
             Send(new { type = "printDone" });
         }
-        if (measureOut != "") { MeasurePdf(path, ok, size?.pages ?? 0, size?.sizes ?? ""); return; }
+        if (quiet) return ok;
+        if (measureOut != "") { MeasurePdf(path, ok, size?.pages ?? 0, size?.sizes ?? ""); return ok; }
         if (ok) SendStatus(Lang.T("print.pdfSaved", path));
         else MessageBox.Show(this, Lang.T("print.pdfFailed", path), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        return ok;
     }
 
     // The PDF through the DevTools protocol (Page.printToPDF), which gives each page the size of its @page box
@@ -793,23 +842,29 @@ class MainForm : Form {
         } catch (Exception ex) { Log("capture failed: " + ex.Message); Send(new { type = "captured", name }); }
     }
 
-    // Calls Bridge.<fn>(arg) in dAHKxodus.ahk. AutoHotkey answers with WM_COPYDATA to this window while we wait
-    // (a thread waiting in SendMessage still takes messages sent to it), so the answer is there when SendMessage returns.
-    string CallAhk(string fn, string arg) {
-        var text = fn + "\t" + arg;
+    // Asks dAHKxodus.ahk to call Bridge.<fn>(arg) (CallTag: "fn\targ") or to start a macro (RunMacroTag: its path).
+    // AutoHotkey takes the call at once and runs it in a thread of its own, so the function may use Doc.ahk (which
+    // talks to this window, now free); its answer comes back later as "DAX2"/"DAX3" with the id (WndProc), and goes
+    // to the page as ahkResult.
+    void CallAhk(long tag, int id, string text) {
+        if (Ahk != IntPtr.Zero && SendCopyData(Ahk, tag, id + "\t" + text, 10000)) return;
+        Send(new { type = "ahkResult", id, result = "", error = Lang.T(Ahk == IntPtr.Zero ? "bridge.notRunning" : "bridge.noAnswer") });
+    }
+
+    // WM_COPYDATA to another window (wParam: this one); true when it took it (answered 1).
+    bool SendCopyData(IntPtr to, long tag, string text, int timeout) {
         var ptr = Marshal.StringToHGlobalUni(text);
         try {
-            reply = null;
-            if (Ahk == IntPtr.Zero) { replyIsError = true; return Lang.T("bridge.notRunning"); }
-            var cds = new COPYDATASTRUCT { dwData = (IntPtr)CallTag, cbData = (text.Length + 1) * 2, lpData = ptr };
-            var sent = SendMessageTimeoutW(Ahk, WM_COPYDATA, Handle, ref cds, 0, 10000, out _);
-            if (sent == IntPtr.Zero || reply == null) { replyIsError = true; return Lang.T("bridge.noAnswer"); }
-            return reply;
+            var cds = new COPYDATASTRUCT { dwData = (IntPtr)tag, cbData = (text.Length + 1) * 2, lpData = ptr };
+            return SendMessageTimeoutW(to, WM_COPYDATA, Handle, ref cds, SMTO_ABORTIFHUNG, timeout, out var answer) != IntPtr.Zero
+                && answer == (IntPtr)1;
         } finally {
             Marshal.FreeHGlobal(ptr);
         }
     }
 
+    // (Inside a message another process sent, a call to WebView2 fails: what these messages start runs afterwards,
+    // through BeginInvoke.)
     protected override void WndProc(ref Message m) {
         if (m.Msg == WM_COPYDATA) {
             var cds = Marshal.PtrToStructure<COPYDATASTRUCT>(m.LParam);
@@ -821,13 +876,231 @@ class MainForm : Form {
                 return;
             }
             if (tag == ReplyOk || tag == ReplyError) {
-                reply = Marshal.PtrToStringUni(cds.lpData, cds.cbData / 2).TrimEnd('\0');
-                replyIsError = tag == ReplyError;
+                var text = Marshal.PtrToStringUni(cds.lpData, cds.cbData / 2).TrimEnd('\0');
+                var tab = text.IndexOf('\t');
+                var id = tab > 0 && int.TryParse(text.AsSpan(0, tab), out var n) ? n : 0;
+                var result = tab >= 0 ? text[(tab + 1)..] : text;
+                var ok = tag == ReplyOk;
+                BeginInvoke(() => Send(new { type = "ahkResult", id, result = ok ? result : "", error = ok ? "" : result }));
+                m.Result = (IntPtr)1;
+                return;
+            }
+            if (tag == DocCall) {
+                var caller = m.WParam;
+                var text = Marshal.PtrToStringUni(cds.lpData, cds.cbData / 2).TrimEnd('\0');
+                BeginInvoke(() => _ = RunScriptCallAsync(caller, text));
                 m.Result = (IntPtr)1;
                 return;
             }
         }
         base.WndProc(ref m);
+    }
+
+    // ---- Scripts: the Doc object (Doc.ahk). A call names an editor command (the page's ribbon.exec runs it) or one
+    // of this window's own (HostCommands); calls run one at a time, in the order they came, from any script.
+
+    sealed class ScriptError : Exception {
+        public string Code { get; }
+        public ScriptError(string code, string message) : base(message) { Code = code; }
+    }
+
+    readonly SemaphoreSlim scriptTurn = new(1, 1);
+    // The scripts' windows that asked for events, and which.
+    readonly Dictionary<IntPtr, HashSet<string>> subscribers = new();
+    // A script's Open or New: done when the page has the document (true) or could not open it (false).
+    TaskCompletionSource<bool>? documentWait;
+    bool measureStarted;
+    bool? reportedModified;
+
+    // The program's own commands, as the page lists the editor's (name, group, description, arguments in order).
+    static readonly (string name, string group, string description, string[] args, string? returns)[] HostCommands = [
+        ("new", "file", "Start a new document (asks to save the one open first, if it has changes).", [], "true, or false when the user cancelled"),
+        ("open", "file", "Open a .docx (asks to save the one open first, if it has changes).", ["path"], "true, or false when it could not be opened or the user cancelled"),
+        ("save", "file", "Save the document: to its file (asking where if it has none), or to path.", ["path?"], "true once written, false when not"),
+        ("exportPdf", "file", "Write the document's pages as a PDF.", ["path"], "true once written"),
+        ("print", "file", "Show the print dialog.", [], null),
+        ("close", "file", "Close dAHKxodus (asks to save a changed document).", [], null),
+        ("setStatus", "program", "Show a line on the status bar.", ["text"], null),
+        ("log", "program", "Write a line to dAHKxodus's log (logs\\dahkxodus.log).", ["text"], null),
+        ("path", "query", "The document's file; \"\" until it is saved.", [], "string"),
+        ("name", "query", "The document's name, as the title bar shows it.", [], "string"),
+        ("modified", "query", "Whether the document has changes not saved.", [], "true or false"),
+        ("appVersion", "query", "dAHKxodus's version.", [], "string"),
+    ];
+
+    async Task RunScriptCallAsync(IntPtr caller, string text) {
+        JsonObject reply;
+        var id = 0;
+        string name = "";
+        await scriptTurn.WaitAsync();
+        try {
+            var call = JsonNode.Parse(text) as JsonObject ?? throw new ScriptError("bad_arguments", "the call is not a JSON object");
+            id = call["id"]?.GetValue<int>() ?? 0;
+            name = call["name"]?.GetValue<string>() ?? "";
+            reply = await ScriptCommandAsync(caller, name, call["args"] as JsonObject ?? new JsonObject());
+        } catch (ScriptError ex) {
+            reply = new JsonObject { ["error"] = ex.Message, ["code"] = ex.Code };
+        } catch (Exception ex) {
+            Log($"script: {name} failed: {ex}");
+            reply = new JsonObject { ["error"] = $"{name}: {ex.Message}", ["code"] = "error" };
+        } finally {
+            scriptTurn.Release();
+        }
+        reply["id"] = id;
+        if (IsWindow(caller) && !SendCopyData(caller, DocReply, reply.ToJsonString(), 5000)) Log($"script: the answer to {name} was not taken");
+    }
+
+    static JsonObject Ok(JsonNode? value) => new() { ["result"] = value };
+
+    async Task<JsonObject> ScriptCommandAsync(IntPtr caller, string name, JsonObject args) {
+        string Arg(string key) => args[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s
+            : throw new ScriptError("bad_arguments", $"{name}: argument \"{key}\" must be a string");
+        string? OptArg(string key) => args[key] is null ? null : Arg(key);
+        void NotAsking() { if (asking) throw new ScriptError("busy", $"{name}: dAHKxodus is waiting for the user (a dialog is open)"); }
+        if (!pageReady || web.CoreWebView2 == null) throw new ScriptError("closed", $"{name}: dAHKxodus is still starting");
+
+        switch (name) {
+            case "appVersion": return Ok(Version);
+            case "path": return Ok(current);
+            case "name": return Ok(DocName);
+            case "modified": return Ok(recovered || await IsDirtyAsync());
+            case "setStatus": SendStatus(Arg("text")); return Ok(null);
+            case "log": Log("script: " + Arg("text")); return Ok(null);
+            case "subscribe":
+            case "unsubscribe":
+                var ev = Arg("event");
+                if (!subscribers.TryGetValue(caller, out var set)) subscribers[caller] = set = new(StringComparer.OrdinalIgnoreCase);
+                if (name == "subscribe") set.Add(ev); else set.Remove(ev);
+                if (set.Count == 0) subscribers.Remove(caller);
+                return Ok(null);
+            case "commands":
+                var list = await PageCallAsync("window.dax.commands()") as JsonArray ?? new JsonArray();
+                foreach (var c in HostCommands) {
+                    var info = new JsonObject {
+                        ["name"] = c.name, ["group"] = c.group, ["description"] = c.description,
+                        ["args"] = new JsonObject(c.args.Select(a => KeyValuePair.Create(a, (JsonNode?)"string"))),
+                        ["order"] = new JsonArray(c.args.Select(a => (JsonNode?)a).ToArray()),
+                    };
+                    if (c.returns != null) info["returns"] = c.returns;
+                    list.Add(info);
+                }
+                return Ok(list);
+            case "new":
+                NotAsking();
+                if (!await CanDiscard()) return Ok(false);
+                return Ok(await WaitForDocument(() => { StartBlank(); return true; }));
+            case "open":
+                NotAsking();
+                var path = Arg("path");
+                if (!File.Exists(path)) throw new ScriptError("refused", $"open: there is no file {path}");
+                if (!await CanDiscard()) return Ok(false);
+                return Ok(await WaitForDocument(() => OpenFile(path, quiet: true)));
+            case "save":
+                NotAsking();
+                var target = OptArg("path");
+                return Ok(await SaveAsync(saveAs: false, target is null or "" ? null : Path.GetFullPath(target)));
+            case "exportPdf":
+                NotAsking();
+                return Ok(await ExportPdfAsync(Path.GetFullPath(Arg("path")), quiet: true));
+            case "print":
+                NotAsking();
+                BeginInvoke(Print);
+                return Ok(null);
+            case "close":
+                BeginInvoke(Close);    // (after this answer)
+                return Ok(null);
+            case "measureDone":
+                if (measureOut == "") break;
+                var good = args["ok"] is JsonValue okv && (okv.TryGetValue<bool>(out var b) ? b : okv.TryGetValue<int>(out var i) && i == 1);
+                Log($"measure: doc api {(good ? "ok" : "FAILED")}: {OptArg("text")}");
+                measureDocDone?.TrySetResult(good);
+                return Ok(null);
+        }
+        // An editor command: the page runs it (ribbon.exec) and answers {result} or {error, code}.
+        var answer = await PageCallAsync($"window.dax.exec({JsonSerializer.Serialize(name)}, {args.ToJsonString()})") as JsonObject
+            ?? throw new ScriptError("error", $"{name}: the editor did not answer");
+        if (answer["error"] is JsonNode error)
+            throw new ScriptError(answer["code"]?.GetValue<string>() ?? "error", error.GetValue<string>());
+        return Ok(answer["result"]?.DeepClone());
+    }
+
+    // A script in the page; its value as JSON.
+    async Task<JsonNode?> PageCallAsync(string script) => JsonNode.Parse(await web.CoreWebView2.ExecuteScriptAsync(script));
+
+    // Starts an Open or a New and waits for the page to have the document.
+    async Task<bool> WaitForDocument(Func<bool> start) {
+        var wait = new TaskCompletionSource<bool>();
+        documentWait = wait;
+        if (!start()) { documentWait = null; return false; }
+        var first = await Task.WhenAny(wait.Task, Task.Delay(180_000));
+        if (documentWait == wait) documentWait = null;
+        return first == wait.Task && wait.Task.Result;
+    }
+
+    // The page has a document (opened, or a new one): a script's Open or New is done, and scripts hear Opened.
+    void DocumentReady(bool ok) {
+        documentWait?.TrySetResult(ok);
+        documentWait = null;
+        RaiseEvent("Opened", new JsonObject { ["path"] = current, ["fileName"] = DocName });
+        ReportModified();
+    }
+
+    // Scripts' Modified event: when the document goes from saved to changed, or back.
+    void ReportModified() {
+        if (reportedModified == Changed) return;
+        reportedModified = Changed;
+        RaiseEvent("Modified", new JsonObject { ["modified"] = Changed });
+    }
+
+    bool Subscribed(string name) => subscribers.Values.Any(s => s.Contains(name));
+
+    // Tells the scripts that asked for this event ("DAX6"); a script whose window has gone is forgotten.
+    void RaiseEvent(string name, JsonObject? data = null) {
+        if (!Subscribed(name)) return;
+        var message = data ?? new JsonObject();
+        message["event"] = name;
+        var text = message.ToJsonString();
+        foreach (var (window, events) in subscribers.ToList()) {
+            if (!IsWindow(window)) { subscribers.Remove(window); continue; }
+            if (events.Contains(name)) SendCopyData(window, DocEvent, text, 2000);
+        }
+    }
+
+    // (Measure runs) tests\doc-check.ahk drives this window through Doc.ahk and says how it went (measureDone).
+    TaskCompletionSource<bool>? measureDocDone;
+    async Task MeasureDocScript() {
+        measureDocDone = new TaskCompletionSource<bool>();
+        CallAhk(RunMacroTag, 0, Path.Combine(dir, "tests", "doc-check.ahk"));
+        var first = await Task.WhenAny(measureDocDone.Task, Task.Delay(60_000));
+        var ok = first == measureDocDone.Task && measureDocDone.Task.Result;
+        if (first != measureDocDone.Task) Log("measure: doc api FAILED: tests\\doc-check.ahk did not finish in 60 s");
+        Send(new { type = "measureReply", what = "docScript", ok });
+    }
+}
+
+// The Macros tab's list: the .ahk files in the program's macros folder and in the user's (Macros beside
+// settings.ini), each with its first comment line as its tip.
+static class Macros {
+    public record Entry(string path, string label, string title);
+
+    public static List<Entry> List(string programFolder) {
+        var list = new List<Entry>();
+        foreach (var folder in new[] { Path.Combine(programFolder, "macros"), Path.Combine(AppFolders.Roaming, "Macros") }) {
+            if (!Directory.Exists(folder)) continue;
+            foreach (var file in Directory.EnumerateFiles(folder, "*.ahk").Order(StringComparer.OrdinalIgnoreCase))
+                list.Add(new Entry(file, Path.GetFileNameWithoutExtension(file), Tip(file)));
+        }
+        return list;
+    }
+
+    static string Tip(string file) {
+        try {
+            foreach (var line in File.ReadLines(file).Take(30)) {
+                var t = line.Trim();
+                if (t.StartsWith(';')) return t.TrimStart(';').Trim();
+            }
+        } catch (IOException) { }
+        return "";
     }
 }
 

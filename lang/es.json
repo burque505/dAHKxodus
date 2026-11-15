@@ -11,13 +11,14 @@
 
   "bridge.noAnswer": "AutoHotkey no respondió",
   "bridge.notRunning": "AutoHotkey no se está ejecutando",
+  "macro.notFound": "No existe la macro {0}",
 
   "page.settings": "Configuración",
   "page.settingsTip": "Configuración de dAHKxodus (Ctrl+,)",
   "page.ahk": "Insertar fecha legal",
   "page.ahkTip": "Pide a AutoHotkey la fecha de hoy (LegalDate en dAHKxodus.ahk) y la escribe en el cursor",
   "page.macros": "Macros",
-  "page.macrosTip": "Ejecuta una macro de AutoHotkey (los métodos de la clase Bridge en dAHKxodus.ahk)",
+  "page.macrosTip": "Ejecuta una macro de AutoHotkey (los scripts de la carpeta macros; manejan el editor con Doc.ahk)",
   "page.close": "Cerrar",
   "page.closeTip": "Cerrar dAHKxodus",
   "page.hint": "Haga clic en un párrafo, título, celda, nota al pie, encabezado o pie de página para editarlo. <kbd>Entrar</kbd> divide un bloque, <kbd>Retroceso</kbd> al principio lo une al anterior, <kbd>Ctrl</kbd>+<kbd>Z</kbd> deshace. Seleccione texto y pulse <b>Nuevo comentario</b> para comentarlo. Solo se vuelve a dibujar el bloque que cambió — todo lo demás conserva su fidelidad, y <b>Guardar</b> escribe un .docx sin pérdidas.",
