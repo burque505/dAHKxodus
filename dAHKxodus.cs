@@ -14,6 +14,7 @@
 #load "host\Recovery.cs"
 #load "host\MacroHotkeys.cs"
 #load "host\MacroDialog.cs"
+#load "host\Hooks.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
 // args: [0] the AHK script's window (bridge calls go there as WM_COPYDATA), [1] the program folder,
@@ -75,7 +76,8 @@ class MainForm : Form {
 
     const int WM_COPYDATA = 0x004A, SMTO_ABORTIFHUNG = 2;
     // With dAHKxodus.ahk: "DAX0" (the companion's hello), "DAX1" (a call to a Bridge function: "id\tfn\targ"),
-    // "DAX2", "DAX3" (its answer, its error: "id\ttext"), "DAX7" (run a macro: "id\tpath"; answered as DAX1 is).
+    // "DAX2", "DAX3" (its answer, its error: "id\ttext"), "DAX7" (run a macro: "id\tpath", or for an event hook
+    // "id\tpath\tevent\tdetail"; answered as DAX1 is, with the macro's process id).
     // With any script (Doc.ahk): "DAX4" (a call, JSON {id, name, args}), "DAX5" (its answer, JSON {id, result} or
     // {id, error, code}), "DAX6" (an event, JSON {event, ...}).
     const long Hello = 0x44415830, CallTag = 0x44415831, ReplyOk = 0x44415832, ReplyError = 0x44415833,
@@ -133,6 +135,8 @@ class MainForm : Form {
         recovery = new Recovery(measureOut != "" ? Path.Combine(dir, "logs", "measure-recovery") : Recovery.DefaultFolder);
         // (a measure run's macro hotkeys are its own: one for the page's check, the user's untouched)
         if (measureOut != "") MacroHotkeys.Override = new(StringComparer.OrdinalIgnoreCase) { ["Insert date.ahk"] = "Ctrl+Alt+J" };
+        // (and its event hooks: none, until its check sets some)
+        if (measureOut != "") EventHooks.Override = new(StringComparer.OrdinalIgnoreCase);
         autosaveTimer.Tick += (s, e) => _ = AutosaveAsync();
         // Leaving the window (another program, a dialog of its own excepted) is a moment to keep the copy current; not
         // more than twice a minute.
@@ -325,6 +329,7 @@ class MainForm : Form {
         recordHeader = Lang.T("page.recordHeader"), recordMoved = Lang.T("page.recordMoved"), recordSkipped = Lang.T("page.recordSkipped"),
         macrosFolder = Lang.T("page.macrosFolder"), macroDeleteTip = Lang.T("page.macroDeleteTip"),
         hotkeys = Lang.T("page.hotkeys"), hotkeysTip = Lang.T("page.hotkeysTip"),
+        hooks = Lang.T("page.hooks"), hooksTip = Lang.T("page.hooksTip"),
         ribbon = Lang.Ribbon(),
     });
 
@@ -402,6 +407,7 @@ class MainForm : Form {
     }
 
     void StartBlank() {
+        newRequested = true;    // (the page's blankOpened then runs the NewDocument hook)
         current = "";
         dirty = recovered = false;
         ClearRecovery();
@@ -433,13 +439,16 @@ class MainForm : Form {
     // ---- Saving
 
     // Asks the page for the document's bytes (it answers "saved" with the id); true once they are written. A target
-    // (a script's Doc.Save(path)) is written without asking where.
-    Task<bool> SaveAsync(bool saveAs, string? target = null) {
+    // (a script's Doc.Save(path)) is written without asking where. The BeforeSave hook runs first, and is waited for
+    // (not for a script's save: the script that saves is the one to change the document first, and the hook's own Doc
+    // calls would wait for that script's call to end).
+    async Task<bool> SaveAsync(bool saveAs, string? target = null, bool hooks = true) {
+        if (hooks) await RunHookAsync(HookEvent.BeforeSave, current);
         var id = ++nextSave;
         var done = new TaskCompletionSource<bool>();
         pendingSaves[id] = (saveAs, target, done);
         Send(new { type = "save", id });
-        return done.Task;
+        return await done.Task;
     }
 
     // The page's bytes for Save (Ctrl+S, the ribbon's Save), or for a save the host asked for (id).
@@ -487,6 +496,7 @@ class MainForm : Form {
         UpdateTitle();
         RaiseEvent("Saved", new JsonObject { ["path"] = current });
         ReportModified();
+        _ = RunHookAsync(HookEvent.Saved, current);
         return true;
     }
 
@@ -519,7 +529,7 @@ class MainForm : Form {
     }
 
     // Before the document is closed or replaced: true when it may go (unchanged, saved now, or the user said Don't Save).
-    async Task<bool> CanDiscard() {
+    async Task<bool> CanDiscard(bool hooks = true) {
         if (measureOut != "" || web.CoreWebView2 == null) return true;
         if (asking) return false;
         if (!recovered && !await IsDirtyAsync()) return true;
@@ -531,7 +541,7 @@ class MainForm : Form {
         } finally { asking = false; }
         if (answer == DialogResult.Cancel) return false;
         if (answer == DialogResult.No) return true;
-        return await SaveAsync(saveAs: false);
+        return await SaveAsync(saveAs: false, hooks: hooks);
     }
 
     protected override async void OnFormClosing(FormClosingEventArgs e) {
@@ -541,6 +551,10 @@ class MainForm : Form {
             return;
         }
         e.Cancel = true;    // (decided below, after asking the page; then closed again)
+        if (closingHook) return;    // (the Closing hook is running: this close waits for it)
+        // The Closing hook first, waited for: it may save the document (then nobody is asked) or change it.
+        closingHook = true;
+        try { await RunHookAsync(HookEvent.Closing, current); } finally { closingHook = false; }
         if (!await CanDiscard()) return;
         closeConfirmed = true;
         BeginInvoke(Close);
@@ -559,6 +573,7 @@ class MainForm : Form {
                     SendUi();
                     if (measureOut == "") SendRecent();
                     SendMacros();    // (their hotkeys work from the start)
+                    SendHooks();
                     pageReady = true;
                     StartAutosave();
                     // A copy left behind by a dAHKxodus that didn't close normally, offered before anything opens.
@@ -570,6 +585,7 @@ class MainForm : Form {
                     else Send(new { type = "blank", name = Untitled });
                     break;
                 case "opened":
+                    newRequested = false;
                     Log($"opened {clock.ElapsedMilliseconds} ms (window {Environment.GetEnvironmentVariable("DAHKXODUS_WINDOW") ?? "default"}; open {Str("open")} ms: first window after {Str("firstWindow")} ms, longest frozen {Str("longestGap")} ms; first paint {Str("paint")} ms, {Str("blocks")} blocks)");
                     if (recovering != null) RecoveredOpen();
                     if (measureOut != "" && !measureStarted) { measureStarted = true; Send(new { type = "measure" }); }
@@ -577,6 +593,7 @@ class MainForm : Form {
                     break;
                 case "blankOpened":    // a new document (New, or a start without one) is in the editor
                     DocumentReady(true);
+                    if (newRequested) { newRequested = false; _ = RunHookAsync(HookEvent.NewDocument, ""); }
                     break;
                 case "openFailed":
                     Log("open failed in the page: " + Str("error"));
@@ -668,6 +685,15 @@ class MainForm : Form {
                     break;
                 case "saveAsRequest":
                     _ = SaveAsync(saveAs: true);
+                    break;
+                case "saveRequest":    // Save (Ctrl+S, the ribbon's) while a BeforeSave hook is set: the hook, then the save
+                    _ = SaveAsync(saveAs: false);
+                    break;
+                case "hooksRequest":    // the Macros tab's Event hooks...
+                    BeginInvoke(ShowHooks);
+                    break;
+                case "measureHooks":    // (measure runs) hooks of its own, then a save as Ctrl+S makes one
+                    if (measureOut != "") _ = MeasureHooks();
                     break;
                 case "measureSave":    // the measure run's check of the host's own save (SaveAsync)
                     _ = SaveAsync(saveAs: false).ContinueWith(t => Log($"measure: host save {(t.Result ? "written" : "FAILED")}, title \"{Text}\""),
@@ -817,6 +843,7 @@ class MainForm : Form {
         } finally {
             Send(new { type = "printDone" });
         }
+        if (ok) _ = RunHookAsync(HookEvent.PdfExported, path);
         if (quiet) return ok;
         if (measureOut != "") { MeasurePdf(path, ok, size?.pages ?? 0, size?.sizes ?? ""); return ok; }
         if (ok) SendStatus(Lang.T("print.pdfSaved", path));
@@ -920,7 +947,10 @@ class MainForm : Form {
                 var id = tab > 0 && int.TryParse(text.AsSpan(0, tab), out var n) ? n : 0;
                 var result = tab >= 0 ? text[(tab + 1)..] : text;
                 var ok = tag == ReplyOk;
-                BeginInvoke(() => Send(new { type = "ahkResult", id, result = ok ? result : "", error = ok ? "" : result }));
+                BeginInvoke(() => {
+                    if (pendingAhk.Remove(id, out var waiter)) waiter.TrySetResult((ok, result));
+                    else Send(new { type = "ahkResult", id, result = ok ? result : "", error = ok ? "" : result });
+                });
                 m.Result = (IntPtr)1;
                 return;
             }
@@ -965,6 +995,9 @@ class MainForm : Form {
         ("name", "query", "The document's name, as the title bar shows it.", [], "string"),
         ("modified", "query", "Whether the document has changes not saved.", [], "true or false"),
         ("appVersion", "query", "dAHKxodus's version.", [], "string"),
+        ("hooks", "hooks", "The event hooks: an array of {event, macro, on}, one per event (macro \"\": none).", [], "array"),
+        ("setHook", "hooks", "Give an event (Started, Opened, NewDocument, BeforeSave, Saved, PdfExported, Closing) a macro to run: a file name in the macros folders, or a full path; \"\" takes it away.", ["event", "macro"], null),
+        ("setHookOn", "hooks", "Switch an event's hook on or off; its macro stays chosen.", ["event", "on"], null),
     ];
 
     async Task RunScriptCallAsync(IntPtr caller, string text) {
@@ -1026,18 +1059,18 @@ class MainForm : Form {
                 return Ok(list);
             case "new":
                 NotAsking();
-                if (!await CanDiscard()) return Ok(false);
+                if (!await CanDiscard(hooks: false)) return Ok(false);
                 return Ok(await WaitForDocument(() => { StartBlank(); return true; }));
             case "open":
                 NotAsking();
                 var path = Arg("path");
                 if (!File.Exists(path)) throw new ScriptError("refused", $"open: there is no file {path}");
-                if (!await CanDiscard()) return Ok(false);
+                if (!await CanDiscard(hooks: false)) return Ok(false);
                 return Ok(await WaitForDocument(() => OpenFile(path, quiet: true)));
             case "save":
                 NotAsking();
                 var target = OptArg("path");
-                return Ok(await SaveAsync(saveAs: false, target is null or "" ? null : Path.GetFullPath(target)));
+                return Ok(await SaveAsync(saveAs: false, target is null or "" ? null : Path.GetFullPath(target), hooks: false));
             case "exportPdf":
                 NotAsking();
                 return Ok(await ExportPdfAsync(Path.GetFullPath(Arg("path")), quiet: true));
@@ -1047,6 +1080,26 @@ class MainForm : Form {
                 return Ok(null);
             case "close":
                 BeginInvoke(Close);    // (after this answer)
+                return Ok(null);
+            case "hooks":
+                var hookList = EventHooks.All();
+                var hooksOff = EventHooks.Off();
+                return Ok(new JsonArray(Enum.GetValues<HookEvent>().Select(ev => (JsonNode?)new JsonObject {
+                    ["event"] = ev.ToString(), ["macro"] = hookList.GetValueOrDefault(ev.ToString()) ?? "", ["on"] = !hooksOff.Contains(ev.ToString()),
+                }).ToArray()));
+            case "setHook":
+            case "setHookOn":
+                if (!EventHooks.TryParse(Arg("event"), out var hookEvent))
+                    throw new ScriptError("bad_arguments", $"{name}: there is no event \"{Arg("event")}\" (events: {string.Join(", ", Enum.GetNames<HookEvent>())})");
+                if (name == "setHook") EventHooks.Set(hookEvent, Arg("macro"));
+                else {
+                    var onArg = args["on"] as JsonValue ?? throw new ScriptError("bad_arguments", "setHookOn: argument \"on\" is missing");
+                    var on = onArg.TryGetValue<bool>(out var bv) ? bv : onArg.TryGetValue<int>(out var iv) ? iv != 0
+                        : onArg.TryGetValue<string>(out var sv) && sv.Trim() is "1" or "true" or "True" or "on";
+                    EventHooks.SetOn(hookEvent, on);
+                }
+                Log($"script: hook {hookEvent} = \"{EventHooks.MacroFor(hookEvent)}\"{(EventHooks.IsOn(hookEvent) ? "" : " (off)")}");
+                SendHooks();
                 return Ok(null);
             case "measureDone":
                 if (measureOut == "") break;
@@ -1082,6 +1135,10 @@ class MainForm : Form {
         documentWait = null;
         RaiseEvent("Opened", new JsonObject { ["path"] = current, ["fileName"] = DocName });
         ReportModified();
+        if (!ok) return;
+        // The hooks: Started once, when the first document is in; Opened for each document opened from a file.
+        if (!startedHookRun) { startedHookRun = true; _ = RunHookAsync(HookEvent.Started, current); }
+        if (current != "" && !newRequested) _ = RunHookAsync(HookEvent.Opened, current);
     }
 
     // Scripts' Modified event: when the document goes from saved to changed, or back.
@@ -1103,6 +1160,108 @@ class MainForm : Form {
             if (!IsWindow(window)) { subscribers.Remove(window); continue; }
             if (events.Contains(name)) SendCopyData(window, DocEvent, text, 2000);
         }
+    }
+
+    // ---- Event hooks (host\Hooks.cs): a macro dAHKxodus runs by itself when something happens
+
+    // Answers from dAHKxodus.ahk that the host itself waits for (a hook's macro started: its process id).
+    readonly Dictionary<int, TaskCompletionSource<(bool ok, string text)>> pendingAhk = new();
+    int nextAhk = 1_000_000;    // (apart from the page's ids)
+    // The events whose macro is running: the event doesn't start it again meanwhile.
+    readonly HashSet<HookEvent> hooksRunning = new();
+    bool newRequested, startedHookRun, closingHook;
+    // (measure runs) the hooks run: event, detail, how it went
+    readonly List<string> hookRuns = new();
+
+    // Asks dAHKxodus.ahk for something and waits for its answer (at most 10 s).
+    async Task<(bool ok, string text)> AhkAsync(long tag, string text) {
+        if (Ahk == IntPtr.Zero) return (false, Lang.T("bridge.notRunning"));
+        var id = ++nextAhk;
+        var done = new TaskCompletionSource<(bool, string)>();
+        pendingAhk[id] = done;
+        if (!SendCopyData(Ahk, tag, id + "\t" + text, 10000)) { pendingAhk.Remove(id); return (false, Lang.T("bridge.noAnswer")); }
+        var first = await Task.WhenAny(done.Task, Task.Delay(10_000));
+        pendingAhk.Remove(id);
+        return first == done.Task ? done.Task.Result : (false, Lang.T("bridge.noAnswer"));
+    }
+
+    // The event's hook, if it has one switched on and not running already: its macro, told the event and the detail.
+    // BeforeSave and Closing wait for it to end (at most EventHooks.WaitSeconds); the others only start it. force: Run
+    // now in the dialog (switched off or not).
+    async Task RunHookAsync(HookEvent e, string detail, string? macro = null) {
+        var force = macro != null;
+        macro ??= EventHooks.MacroFor(e);
+        if (macro == "" || (!force && !EventHooks.IsOn(e)) || hooksRunning.Contains(e)) return;
+        var path = EventHooks.PathOf(macro, dir);
+        if (!File.Exists(path)) {
+            Log($"hook {e}: no macro {path}");
+            SendStatus("⚠ " + Lang.T("hooks.missing", e, macro));
+            return;
+        }
+        hooksRunning.Add(e);
+        try {
+            Log($"hook {e}: {Path.GetFileName(path)} \"{detail}\"");
+            var (ok, answer) = await AhkAsync(RunMacroTag, path + "\t" + e + "\t" + detail);
+            if (!ok) {
+                Log($"hook {e} not started: {answer}");
+                SendStatus("⚠ " + Lang.T("hooks.failed", e, answer));
+                hookRuns.Add($"{e} not started");
+                return;
+            }
+            Process? process = null;
+            try { if (int.TryParse(answer, out var pid)) process = Process.GetProcessById(pid); } catch (ArgumentException) { }    // (ended already)
+            if (EventHooks.Waits(e) && process != null) {
+                var ended = await Task.WhenAny(process.WaitForExitAsync(), Task.Delay(EventHooks.WaitSeconds * 1000));
+                if (!process.HasExited) { Log($"hook {e}: still running after {EventHooks.WaitSeconds} s, not waited for"); SendStatus(Lang.T("hooks.slow", e, EventHooks.WaitSeconds)); }
+            } else if (process != null) await process.WaitForExitAsync();
+            hookRuns.Add($"{e} {detail}");
+        } finally {
+            hooksRunning.Remove(e);
+        }
+    }
+
+    // The page saves through the host when a BeforeSave hook is on (it runs before the document's bytes are taken).
+    void SendHooks() {
+        if (web.CoreWebView2 == null) return;
+        Send(new { type = "hooks", beforeSave = EventHooks.MacroFor(HookEvent.BeforeSave) != "" && EventHooks.IsOn(HookEvent.BeforeSave) });
+    }
+
+    // The Macros tab's Event hooks...: a macro for each event; OK keeps them.
+    void ShowHooks() {
+        if (asking || measureOut != "") return;
+        asking = true;
+        try {
+            using var dlg = new EventHooksDialog(dir, (ev, macro) => _ = RunHookAsync(ev, ev == HookEvent.PdfExported ? "" : current, macro));
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            EventHooks.Save(dlg.Result, dlg.OffResult);
+            Log("hooks: " + string.Join(", ", EventHooks.All().Select(p => $"{p.Key}={p.Value}{(EventHooks.IsOn(Enum.Parse<HookEvent>(p.Key)) ? "" : " (off)")}")));
+        } finally { asking = false; }
+        SendHooks();
+    }
+
+    // (Measure runs) tests\hook-check.ahk as the BeforeSave and Saved hooks; the page then saves as Ctrl+S does. The
+    // BeforeSave hook types a mark at the end, which the saved file must have; then both must have run, in order.
+    async Task MeasureHooks() {
+        var script = Path.Combine(dir, "tests", "hook-check.ahk");
+        EventHooks.Override = new(StringComparer.OrdinalIgnoreCase) { ["BeforeSave"] = script, ["Saved"] = script };
+        hookRuns.Clear();
+        SendHooks();
+        Send(new { type = "measureReply", what = "hooksSet", ok = true });
+        var until = DateTime.Now.AddSeconds(30);
+        while (DateTime.Now < until && !hookRuns.Any(r => r.StartsWith("Saved"))) await Task.Delay(200);
+        EventHooks.Override = new(StringComparer.OrdinalIgnoreCase);
+        SendHooks();
+        var file = Path.ChangeExtension(measureOut, ".host.docx");
+        var marked = false;
+        try {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(file);
+            using var reader = new StreamReader(zip.GetEntry("word/document.xml")!.Open());
+            marked = reader.ReadToEnd().Contains("[hook before save]");
+        } catch (Exception ex) { Log("measure: hooks: " + ex.Message); }
+        var order = string.Join(" | ", hookRuns);
+        var good = marked && hookRuns.Count == 2 && hookRuns[0].StartsWith("BeforeSave") && hookRuns[1] == "Saved " + Path.GetFullPath(file);
+        Log($"measure: hooks {(good ? "ok" : "FAILED")} (ran: {order}; BeforeSave's mark {(marked ? "in" : "NOT in")} the saved file)");
+        Send(new { type = "measureReply", what = "hooks", ok = good });
     }
 
     // ---- Recorded macros

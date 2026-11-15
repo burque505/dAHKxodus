@@ -34,6 +34,12 @@
 ;   Command      e.Command (its name, "" for a ribbon control that has none), e.Label, e.Args (an object)
 ;   Closed                                                  the window has closed
 ; Doc.On makes the script persistent: exit with ExitApp (for example on the Closed event).
+;
+; Event hooks need no script running: dAHKxodus starts a macro by itself when an event happens (Macros > Event hooks,
+; or Doc.SetHook("Saved", "PDF on save.ahk")). The macro gets the event in A_Args[1] (Started, Opened, NewDocument,
+; BeforeSave, Saved, PdfExported, Closing) and the document's file or the PDF in A_Args[2] (also in the environment:
+; DAHKXODUS_EVENT, DAHKXODUS_EVENT_DETAIL). BeforeSave and Closing wait for it (at most 15 s). Doc.Hooks() lists them;
+; Doc.SetHookOn("Saved", false) switches one off, its macro kept.
 
 class DocError extends Error {
     Code := "error"

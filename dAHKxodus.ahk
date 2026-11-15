@@ -25,7 +25,7 @@ OnMessage(0x004A, BridgeReceive)        ; WM_COPYDATA: a call from the editor
 OnMessage(0x8001, (*) => ExitApp())     ; the editor's window has closed
 
 ; From the editor's window (wParam): a call, dwData "DAX1", text "id`tFunction`targument", or a macro to start,
-; "DAX7", text "id`tpath". Taken at once (the window goes on), and run in a thread of its own, so a function may use
+; "DAX7", text "id`tpath" (an event hook's: "id`tpath`tevent`tdetail"; its answer is the macro's process id). Taken at once (the window goes on), and run in a thread of its own, so a function may use
 ; Doc, which waits for that window; the answer goes back as WM_COPYDATA "DAX2" ("id`tresult") or "DAX3" ("id`terror").
 BridgeReceive(wParam, lParam, msg, hwnd) {
     tag := NumGet(lParam, 0, "uptr")
@@ -38,18 +38,22 @@ BridgeReceive(wParam, lParam, msg, hwnd) {
 }
 
 BridgeRun(editor, tag, text) {
-    parts := StrSplit(text, "`t", , 3)
+    parts := StrSplit(text, "`t", , tag = 0x44415837 ? 4 : 3)
     id := parts[1]
     try {
         if tag = 0x44415837 {
-            ; a macro: its own AutoHotkey process, told which window to drive (Doc.ahk reads DAHKXODUS_HWND)
+            ; a macro: its own AutoHotkey process, told which window to drive (Doc.ahk reads DAHKXODUS_HWND); an event
+            ; hook's is also told the event and what it was about, as A_Args[1] and [2] and in the environment
             path := parts[2]
             if !FileExist(path)
                 throw Error("No macro " path)
             SplitPath(path, , &folder)
+            event := parts.Length >= 3 ? parts[3] : "", detail := parts.Length >= 4 ? parts[4] : ""
             EnvSet("DAHKXODUS_HWND", editor)
-            Run('"' A_AhkPath '" "' path '"', folder)
-            result := ""
+            EnvSet("DAHKXODUS_EVENT", event)
+            EnvSet("DAHKXODUS_EVENT_DETAIL", detail)
+            Run('"' A_AhkPath '" "' path '"' (event != "" ? ' "' event '" "' detail '"' : ""), folder, , &pid)
+            result := pid
         } else {
             if !Bridge.HasMethod(parts[2])
                 throw Error("No AutoHotkey bridge function " parts[2])

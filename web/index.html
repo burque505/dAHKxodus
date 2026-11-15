@@ -456,6 +456,28 @@ async function hotkeyChecks() {
   return out.join(", ");
 }
 
+// Event hooks: the host makes tests\hook-check.ahk the BeforeSave and Saved hooks (the measure run's own) and says so
+// (Save then goes through it); Save, as Ctrl+S does, runs BeforeSave (which types a mark at the end), saves, runs
+// Saved. The host checks the order and the saved file; here, the mark is in the document and Save is the page's again.
+async function hookChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("hooks.docx");
+  caretAtStart(); relabel();
+  await frame();
+  out.push(`set ${(await measureAsk("measureHooks", "hooksSet", 10000)) ? "ok" : "FAILED"}`);
+  out.push(`save through the host ${hooksBeforeSave ? "ok" : "FAILED"}`);
+  const ran = new Promise((resolve) => {
+    measureWaiters.set("hooks", resolve);
+    setTimeout(() => { if (measureWaiters.delete("hooks")) resolve(null); }, 40000);
+  });
+  ribbon.download();
+  out.push(`ran ${(await ran) ? "ok" : "FAILED"}`);
+  out.push(`mark ${ribbon.exec("text").includes("[hook before save]") ? "ok" : `FAILED (text ${JSON.stringify(ribbon.exec("text"))})`}`);
+  out.push(`save the page's again ${hooksBeforeSave ? "FAILED" : "ok"}`);
+  return out.join(", ");
+}
+
 // The command palette, as keys would: Ctrl+Shift+P opens it with the focus in its box; typing finds Bold (named as the
 // ribbon names it, in the language in use) first, at its place on the Home tab; a macro and a list's choice are there;
 // Enter on Page width runs it as its button does and closes the palette; Escape closes it and gives the document its
@@ -716,6 +738,7 @@ const ui = {
   recordMoved: "(here the caret was moved, or text selected: not recorded)", recordSkipped: "({0}: not recorded)",
   macrosFolder: "Open my macros folder", macroDeleteTip: "(right-click to delete it)",
   hotkeys: "Hotkeys…", hotkeysTip: "Give a macro a hotkey: it runs while dAHKxodus is the active window",
+  hooks: "Event hooks…", hooksTip: "Macros that run by themselves when something happens: a document opened or saved, a PDF exported, the window closing",
 };
 // The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
 // help line under it, which the host gives whole (a sentence translated word by word would read badly). Again after
@@ -856,6 +879,9 @@ function takenShortcuts() {
 function showHotkeys() {
   post({ type: "hotkeysRequest", taken: takenShortcuts() });
 }
+// While a BeforeSave event hook is on (the host says: "hooks"), Save goes through the host, which runs the hook
+// (it may change the document) before it asks for the document's bytes.
+let hooksBeforeSave = false;
 
 function labelButtons() {
   const settings = document.querySelector(".dax-settings");
@@ -868,6 +894,8 @@ function labelButtons() {
   if (button) { button.textContent = ui.macros + " \u25BE"; button.title = ui.macrosTip; }
   const hotkeys = document.querySelector(".dax-hotkeysbutton");
   if (hotkeys) { hotkeys.textContent = ui.hotkeys; hotkeys.title = ui.hotkeysTip; }
+  const hooks = document.querySelector(".dax-hooksbutton");
+  if (hooks) { hooks.textContent = ui.hooks; hooks.title = ui.hooksTip; }
   showRecording();
   for (const b of document.querySelectorAll(".dax-palette-button, .dax-palettetab")) {
     b.title = ui.paletteTip;
@@ -932,11 +960,15 @@ function addMacrosTab() {
     + '<button type="button" class="dax-macrobutton" aria-haspopup="menu" aria-expanded="false"></button>'
     + '<button type="button" class="dax-recordbutton"></button>'
     + '<button type="button" class="dax-hotkeysbutton"></button>'
+    + '<button type="button" class="dax-hooksbutton"></button>'
     + '<button type="button" class="dax-palettetab"></button></div></div>';
   viewPanel.after(panel);
   const hotkeysButton = panel.querySelector(".dax-hotkeysbutton");
   hotkeysButton.addEventListener("mousedown", (e) => e.preventDefault());
   hotkeysButton.addEventListener("click", showHotkeys);
+  const hooksButton = panel.querySelector(".dax-hooksbutton");
+  hooksButton.addEventListener("mousedown", (e) => e.preventDefault());
+  hooksButton.addEventListener("click", () => post({ type: "hooksRequest" }));
   const recordButton = panel.querySelector(".dax-recordbutton");
   recordButton.addEventListener("mousedown", (e) => e.preventDefault());
   recordButton.addEventListener("click", toggleRecording);
@@ -1453,6 +1485,8 @@ host?.addEventListener("message", async (e) => {
       applyView(savedView); caretAtStart(); relabel();
       reportView();
       post({ type: "blankOpened" });
+    } else if (m.type === "hooks") {
+      hooksBeforeSave = !!m.beforeSave;
     } else if (m.type === "macros") {
       macroFiles = m.entries ?? [];
       if (document.querySelector(".dax-macromenu[data-open]")) renderMacroMenu();
@@ -1531,6 +1565,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
       post({ type: "log", text: "recording: " + (await recordingChecks()) });
       post({ type: "log", text: "hotkeys: " + (await hotkeyChecks()) });
+      post({ type: "log", text: "hooks: " + (await hookChecks()) });
       // Doc.ahk: tests\doc-check.ahk, a script of its own, drives the editor and logs what it found.
       post({ type: "log", text: "doc api: " + ({ true: "ok", false: "FAILED", null: "FAILED (no answer)" })[await measureAsk("measureDocScript", "docScript", 70000)] });
       // The cost of crossing to the engine for a small call (an edit's calls are small): 50 GetVersion calls.
@@ -1618,6 +1653,7 @@ ribbon = mountRibbon("#app", {
   onSave: (bytes, name) => {
     if (nativeBridge?.verifyReport) post({ type: "log", text: "verify: " + nativeBridge.verifyReport() });
     recordLine("Doc.Save()");
+    if (hooksBeforeSave) { post({ type: "saveRequest" }); return; }    // (the hook first: these bytes may be out of date)
     post({ type: "saved", name, b64: toB64(bytes) });
   },
   onDirtyChange: (dirty) => post({ type: "dirty", dirty }),
