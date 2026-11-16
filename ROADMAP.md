@@ -17,7 +17,7 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   recovery, settings, print and PDF; the first installer preview, in a full and a light edition
 - [x] **3. AutoHotkey** (0.0.3.0): a `Doc` object for scripts, with events; the command palette; macro recording and hotkeys;
   event hooks; your own buttons on the ribbon
-- [ ] **4. Other formats:** File > Save a Copy As: a web page (.html), Markdown (.md) or plain text (.txt), made by
+- [x] **4. Other formats** (0.0.4.0): File > Save a Copy As: a web page (.html), Markdown (.md) or plain text (.txt), made by
   Docxodus's own converters; the window goes on with the .docx. `Doc.SaveCopy` for scripts
 - [ ] **5. Paste and paragraphs:** pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
   dialog (exact indents, tab stops, keep with next...); multilevel lists as in AhkWord (define, change and keep each
