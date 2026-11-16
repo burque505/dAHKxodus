@@ -54,6 +54,34 @@ try {
     Check("undo", Doc.FormatState().bold = false)
     Check("find by object", Doc.Find({text: "second", matchCase: true}) = 0 && Doc.Find({text: "Second"}) = 1)
     Check("replaceAll", Doc.ReplaceAll("Second", "Next") = 1 && InStr(Doc.Text, "Next line"))
+
+    ; Paste: HTML (a list), plain text (one undo step), the clipboard as Ctrl+V reads it, and a Word picture (a file in
+    ; the temporary folder, which the host reads for the page). The text pasted here is undone again.
+    Doc.MoveCaret("documentEnd")
+    before := Doc.Text
+    Check("pasteHtml", Doc.PasteHtml("<p>Pasted</p><ol><li>one</li><li>two</li></ol>") = true
+        && InStr(Doc.Text, "Pasted`none`ntwo"), Doc.Text)
+    Check("pasteText", Doc.PasteText("p1`tx`np2") = true && InStr(Doc.Text, "twop1`tx`np2"), Doc.Text)
+    Doc.Undo()
+    Check("paste is one undo step", !InStr(Doc.Text, "p1") && InStr(Doc.Text, "Pasted"), Doc.Text)
+    saved := ClipboardAll()
+    A_Clipboard := "from the clipboard"
+    try ok := Doc.Paste("text")
+    catch as e
+        ok := e.Message
+    A_Clipboard := saved
+    Check("paste (clipboard)", ok = true && InStr(Doc.Text, "from the clipboard"), ok " | " Doc.Text)
+    clipDir := A_Temp "\dax-measure-clip"
+    DirCreate(clipDir)
+    WritePng(clipDir "\clip_image001.png")
+    pictureUrl := "file:///" StrReplace(clipDir "\clip_image001.png", "\", "/")
+    pasted := Doc.PasteHtml('<p>pic <img src="' pictureUrl '" width="1" height="1"/></p>')
+    Doc.SaveCopy(clipDir "\pasted.html")    ; (a web page copy carries the document's pictures)
+    Check("paste picture (Word's clip file)", pasted = true && InStr(FileRead(clipDir "\pasted.html", "UTF-8"), "<img"), pasted)
+    try DirDelete(clipDir, true)
+    Loop 3    ; (the clipboard's paste, the picture's, the HTML's: the text's is undone already)
+        Doc.Undo()
+    Check("pastes undone", Doc.Text == before, Doc.Text)
     Check("unknown command (here)", ErrorCode(() => Doc.NoSuchCommand()) = "unknown_command")
     Check("unknown command (editor)", ErrorCode(() => Doc.Exec("noSuchCommand")) = "unknown_command")
     Check("bad arguments", ErrorCode(() => Doc.FontSize("big")) = "bad_arguments")
@@ -113,4 +141,14 @@ Doc_FullPath(path) {
     buf := Buffer(2048)
     DllCall("GetFullPathNameW", "str", path, "uint", 1024, "ptr", buf, "ptr", 0)
     return StrGet(buf)
+}
+
+; A 1x1 PNG, as Word leaves a copied picture in the temporary folder.
+WritePng(path) {
+    b64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    size := 0
+    DllCall("crypt32\CryptStringToBinaryW", "str", b64, "uint", 0, "uint", 1, "ptr", 0, "uint*", &size, "ptr", 0, "ptr", 0)
+    buf := Buffer(size)
+    DllCall("crypt32\CryptStringToBinaryW", "str", b64, "uint", 0, "uint", 1, "ptr", buf, "uint*", &size, "ptr", 0, "ptr", 0)
+    FileOpen(path, "w").RawWrite(buf, size)
 }

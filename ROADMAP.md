@@ -19,7 +19,7 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   event hooks; your own buttons on the ribbon
 - [x] **4. Other formats** (0.0.4.0): File > Save a Copy As: a web page (.html), Markdown (.md) or plain text (.txt), made by
   Docxodus's own converters; the window goes on with the .docx. `Doc.SaveCopy` for scripts
-- [ ] **5. Paste and paragraphs:** pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
+- [ ] **5. Paste and paragraphs:** several windows, as in Word (done), with an Arrange windows macro; pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
   dialog (exact indents, tab stops, keep with next...); multilevel lists as in AhkWord (define, change and keep each
   level's number format, text such as 1.1.1., indent and start; all nine levels); Format Painter; Change Case; more
   find options

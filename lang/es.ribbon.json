@@ -279,5 +279,16 @@
   "Close (Esc)": "Cerrar (Esc)",
   "Zoom out": "Alejar",
   "Zoom level": "Nivel de zoom",
-  "Zoom in": "Acercar"
+  "Zoom in": "Acercar",
+  "Clipboard": "Portapapeles",
+  "Paste": "Pegar",
+  "Paste (Ctrl+V)": "Pegar (Ctrl+V)",
+  "Paste options": "Opciones de pegado",
+  "Keep Source Formatting": "Mantener formato de origen",
+  "Merge Formatting": "Combinar formato",
+  "Keep Text Only": "Mantener solo texto",
+  "Ctrl+Shift+V": "Ctrl+Mayús+V",
+  "The source's fonts, sizes and colors come along": "Se conservan las fuentes, los tamaños y los colores del origen",
+  "Paragraphs, headings, lists, tables, links and emphasis come along; fonts, sizes and colors are the document's": "Se conservan párrafos, títulos, listas, tablas, vínculos y énfasis; las fuentes, los tamaños y los colores son los del documento",
+  "The text only, taking the formatting where it lands": "Solo el texto, con el formato del lugar donde se pega"
 }

@@ -1290,7 +1290,7 @@ function paletteItems() {
     items.push(item);
   };
   const skip = (el) => !!el.closest('.dxr-pop, [data-dxr="findbar"], [data-dxr="loader"], .dax-palette-back, .dax-macromenu')
-    || el.type === "file" || el.dataset.dxr === "filebutton" || el.dataset.dxr === "save";
+    || el.type === "file" || el.dataset.dxr === "filebutton" || el.dataset.dxr === "save" || el.dataset.dxr === "pastemore";
   for (const el of root.querySelectorAll("button, input[type=checkbox]")) {
     if (skip(el)) continue;
     const off = el.disabled || el.getAttribute("aria-disabled") === "true" || inHiddenTab(el);
@@ -1334,6 +1334,16 @@ function paletteItems() {
     const name = squash(spans[0]?.textContent ?? b.textContent);
     add({ key: "f:" + name, name, where: ui.paletteFile, description: squash(b.title), keys: squash(spans[1]?.textContent),
       on: false, off: b.disabled, run: () => b.click() });
+  }
+  // Home > Clipboard's paste options (the Paste button's menu): Keep Source Formatting, Merge Formatting, Keep Text Only.
+  const pasteButton = root.querySelector('[data-dxr="paste"]');
+  if (pasteButton) {
+    for (const b of root.querySelectorAll('[data-dxr="pastemenu"] button[data-paste]')) {
+      add({ key: "p:" + b.dataset.paste, name: squash(b.querySelector("span")?.textContent), where: placeOf(pasteButton),
+        description: squash(b.title), keys: squash(b.querySelector("kbd")?.textContent), on: false,
+        off: pasteButton.disabled || pasteButton.getAttribute("aria-disabled") === "true",
+        run: () => runControl(pasteButton, () => b.click()) });
+    }
   }
   for (const m of macros())
     add({ key: "m:" + (m.fn ?? m.path), name: m.label, where: ui.paletteMacro, description: m.title, keys: m.hotkey ?? "", on: false, off: false, run: () => runMacro(m) });
@@ -1761,6 +1771,12 @@ ribbon = mountRibbon("#app", {
   // opens in continuous view, and applyView switches to page view once it is in, as the user's click would.)
   ...(who.get("user") ? { commentAuthor: who.get("user"), revisionAuthor: who.get("user"), commentInitials: who.get("initials") ?? "" } : {}),
   typingUndo: "word",    // Undo takes typing back a word at a time, as in Word (the engine answers natively, in ms)
+  // Paste: Word's clipboard HTML names its pictures as files in the temporary folder, which the page cannot read; the
+  // host reads them (EngineHost.ReadPastedImage). Pictures on the web the page fetches itself.
+  resolvePasteImage: async (src) => {
+    if (!/^(file|https?):/i.test(src) || !host?.hostObjects?.engine) return null;
+    try { return (await host.hostObjects.engine.ReadPastedImage(src)) || null; } catch { return null; }
+  },
   // Save (the button, Ctrl+S): the host writes the bytes to the document's file (asking where, the first time) and
   // answers savedOk, which marks the document saved; a cancelled or failed save leaves it changed.
   // (a macro being recorded keeps the File commands that a script can repeat: Save, New, Print; the others as a note)
@@ -1771,6 +1787,8 @@ ribbon = mountRibbon("#app", {
     post({ type: "saved", name, b64: toB64(bytes) });
   },
   onDirtyChange: (dirty) => post({ type: "dirty", dirty }),
+  // What the engine refused (a paste it could not take, ...) goes to the log, so a report says why.
+  onEditFailed: (info) => post({ type: "log", text: `editor: the engine refused an edit${info.code ? ` (${info.code})` : ""}: ${info.message}` }),
   onNewRequest: () => { recordLine("Doc.New()"); post({ type: "newRequest" }); },
   onOpenRequest: () => { recordLine("; " + ui.recordSkipped.replace("{0}", "Open")); post({ type: "openRequest" }); },
   onOpenRecent: (entry) => { recordLine(`Doc.Open(${ahkValue(entry.id)})`); post({ type: "openRecent", path: entry.id }); },
@@ -1795,9 +1813,10 @@ ribbon = mountRibbon("#app", {
 // as the ribbon runs it (the rail and onCommand see it), and the list of them.
 window.dax = {
   isDirty: () => !!ribbon?.isDirty,
-  exec: (name, args) => {
+  // (async: a command that takes a while, paste, answers when it is done; the host awaits it)
+  exec: async (name, args) => {
     try {
-      const result = ribbon.exec(name, args ?? {});
+      const result = await ribbon.exec(name, args ?? {});
       return { result: result === undefined ? null : result };
     } catch (err) {
       return { error: String(err?.message ?? err), code: err?.code ?? "error" };

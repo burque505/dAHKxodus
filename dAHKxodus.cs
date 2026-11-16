@@ -210,6 +210,10 @@ class MainForm : Form {
             if (!e.Uri.StartsWith("https://app.example/", StringComparison.OrdinalIgnoreCase)) { e.Cancel = true; Log("navigation refused: " + e.Uri); }
         };
         cw.NewWindowRequested += (s, e) => { e.Handled = true; };
+        // The ribbon's Paste (and Doc.Paste) reads the clipboard with the page's Clipboard API, which asks first.
+        cw.PermissionRequested += (s, e) => {
+            if (e.PermissionKind == CoreWebView2PermissionKind.ClipboardRead) e.State = CoreWebView2PermissionState.Allow;
+        };
         // The right-click menu keeps the editing items (cut, copy, paste, spelling, emoji) and loses the browser's:
         // Refresh and Back would reload the editor and lose the document's changes without asking; Save as, Print,
         // Inspect and the rest are the page's, not the document's.
@@ -1355,8 +1359,9 @@ class MainForm : Form {
                 measureDocDone?.TrySetResult(good);
                 return Ok(null);
         }
-        // An editor command: the page runs it (ribbon.exec) and answers {result} or {error, code}.
-        var answer = await PageCallAsync($"window.dax.exec({JsonSerializer.Serialize(name)}, {args.ToJsonString()})") as JsonObject
+        // An editor command: the page runs it (ribbon.exec) and answers {result} or {error, code}; a command that takes
+        // a while (paste) answers when it is done.
+        var answer = await PageAwaitAsync($"window.dax.exec({JsonSerializer.Serialize(name)}, {args.ToJsonString()})") as JsonObject
             ?? throw new ScriptError("error", $"{name}: the editor did not answer");
         if (answer["error"] is JsonNode error)
             throw new ScriptError(answer["code"]?.GetValue<string>() ?? "error", error.GetValue<string>());
@@ -1365,6 +1370,17 @@ class MainForm : Form {
 
     // A script in the page; its value as JSON.
     async Task<JsonNode?> PageCallAsync(string script) => JsonNode.Parse(await web.CoreWebView2.ExecuteScriptAsync(script));
+
+    // A script in the page whose value may be a promise: its value, once settled, as JSON (ExecuteScriptAsync answers
+    // a promise as {}). Through DevTools' Runtime.evaluate, in the page's own world.
+    async Task<JsonNode?> PageAwaitAsync(string script) {
+        var json = await web.CoreWebView2.CallDevToolsProtocolMethodAsync("Runtime.evaluate",
+            JsonSerializer.Serialize(new { expression = script, awaitPromise = true, returnByValue = true }));
+        var reply = JsonNode.Parse(json);
+        if (reply?["exceptionDetails"] is JsonNode failure)
+            throw new ScriptError("error", failure["exception"]?["description"]?.ToString() ?? failure["text"]?.ToString() ?? "the page failed");
+        return reply?["result"]?["value"]?.DeepClone();
+    }
 
     // Starts an Open or a New and waits for the page to have the document.
     async Task<bool> WaitForDocument(Func<bool> start) {
@@ -1725,6 +1741,47 @@ public class EngineHost {
             var name = method.Substring(method.IndexOf('.') + 1);
             stats.TryGetValue(name, out var s);
             stats[name] = (s.n + 1, s.ms + Stopwatch.GetElapsedTime(t).TotalMilliseconds);
+        }
+    }
+
+    // A pasted picture the page cannot read itself (paste-html.ts, resolvePasteImage): Word's clipboard HTML names its
+    // pictures as files in the temporary folder (file:///C:/Users/.../AppData/Local/Temp/msohtmlclip1/01/clip_image001.png).
+    // Answers a data: URL, or "" for anything else: only pictures in the temporary folder, up to 20 MB, are read.
+    public string ReadPastedImage(string src) {
+        try {
+            if (!Uri.TryCreate(src, UriKind.Absolute, out var uri)) return "";
+            if (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp) return DownloadPastedImage(uri);
+            if (!uri.IsFile) return "";
+            var path = Path.GetFullPath(uri.LocalPath);
+            var temp = Path.GetFullPath(Path.GetTempPath());
+            if (!path.StartsWith(temp, StringComparison.OrdinalIgnoreCase)) return "";
+            var type = Path.GetExtension(path).ToLowerInvariant() switch {
+                ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".bmp" => "image/bmp",
+                _ => "",
+            };
+            var info = new FileInfo(path);
+            if (type == "" || !info.Exists || info.Length > 20 * 1024 * 1024) return "";
+            return $"data:{type};base64,{Convert.ToBase64String(File.ReadAllBytes(path))}";
+        } catch (Exception ex) {
+            MainForm.Log($"paste: picture {src} not read: {ex.Message}");
+            return "";
+        }
+    }
+
+    // A picture on the web that the page could not fetch itself (the site does not let other pages read it): the host
+    // downloads it, as Word does when it pastes a web page. 6 s and 20 MB at most; only images.
+    static readonly System.Net.Http.HttpClient web = new() { Timeout = TimeSpan.FromSeconds(6) };
+    static string DownloadPastedImage(Uri uri) {
+        try {
+            using var response = web.GetAsync(uri, System.Net.Http.HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+            var type = response.Content.Headers.ContentType?.MediaType ?? "";
+            if (!response.IsSuccessStatusCode || !type.StartsWith("image/") || type == "image/svg+xml") return "";
+            if (response.Content.Headers.ContentLength > 20 * 1024 * 1024) return "";
+            var bytes = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+            return bytes.Length > 20 * 1024 * 1024 ? "" : $"data:{type};base64,{Convert.ToBase64String(bytes)}";
+        } catch (Exception ex) {
+            MainForm.Log($"paste: picture {uri} not downloaded: {ex.Message}");
+            return "";
         }
     }
 
