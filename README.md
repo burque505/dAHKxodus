@@ -55,6 +55,12 @@ While the document has changes not saved, dAHKxodus keeps a recovery copy of it:
 
 If dAHKxodus ends without closing (a crash, a power cut, Windows restarting), the next start without a document offers the copy: **Yes** recovers it as changes not saved to the document it was (Save replaces that file; Save As keeps both), **No** discards it, **Cancel** decides next time. Started with a document, dAHKxodus says on the status bar that a copy is waiting. Each dAHKxodus window keeps copies of its own, so two windows never take each other's for left behind. The copies are in `%LOCALAPPDATA%\dAHKxodus\Recovery` (portable mode: `data\Recovery`).
 
+## Several windows
+
+Each document has a window of its own, as in Word. **New** (Ctrl+N) and **Open** (Ctrl+O, Recent, a file dropped on the window) open a new window, unless the window holds only a new document nobody has typed in yet: then it takes the document. A document that is open already comes to the front instead of opening twice. A .docx double-clicked while dAHKxodus is running opens in a new window of the same dAHKxodus. All windows share one program: closing one closes only it, and dAHKxodus ends with the last.
+
+The **Arrange windows** macro (Macros tab) puts the open windows side by side on the screen of the active one (up to three in columns, more in a grid), each in page view with its page fitted to the width. Give it a hotkey or a ribbon button to have it at hand. Scripts: `Doc.NewWindow(path)` opens a window and answers with it (set `Doc.Window` to it to send `Doc` calls there); `Doc.SetView(true, "width")` and `Doc.View` set and read the view.
+
 ## AutoHotkey
 
 Any AutoHotkey v2 script can drive a running dAHKxodus through `Doc.ahk` (beside `dAHKxodus.ahk`):

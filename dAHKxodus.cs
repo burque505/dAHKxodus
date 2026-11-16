@@ -45,13 +45,23 @@ MainForm.Log("---- start " + (start == "" ? "(no document)" : Path.GetFileName(s
 Settings.Init();
 Lang.Load();
 
+// dAHKxodus is running already (from this same folder): that one opens the file, or a new document, in a window of its
+// own, and this start ends here. (Not for a measure run: it runs on a desktop of its own, by itself.)
+if (measureOut == "" && Environment.GetEnvironmentVariable("DAHKXODUS_NEW_PROCESS") != "1" && MainForm.HandOff(dir, start)) {
+    MainForm.Log("handed to the dAHKxodus already running: " + (start == "" ? "(a new document)" : Path.GetFileName(start)));
+    if (ahk != IntPtr.Zero) MainForm.PostMessageW(ahk, 0x8001, IntPtr.Zero, IntPtr.Zero);    // (dAHKxodus.ahk: done)
+    return 0;
+}
+
 var ui = new Thread(() => {
     try {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (s, e) => MainForm.Log("UI exception: " + e.Exception);
         try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
         Application.EnableVisualStyles();
-        Application.Run(new MainForm(ahk, dir, start, measureOut));
+        // Every window runs on this thread; the program ends with the last of them (MainForm.OnFormClosed).
+        new MainForm(ahk, dir, start, measureOut).Show();
+        Application.Run(new ApplicationContext());
     } catch (Exception ex) {
         MainForm.Log("fatal: " + ex);
     }
@@ -80,10 +90,13 @@ class MainForm : Form {
     // With dAHKxodus.ahk: "DAX0" (the companion's hello), "DAX1" (a call to a Bridge function: "id\tfn\targ"),
     // "DAX2", "DAX3" (its answer, its error: "id\ttext"), "DAX7" (run a macro: "id\tpath", or for an event hook
     // "id\tpath\tevent\tdetail"; answered as DAX1 is, with the macro's process id).
+    // From another dAHKxodus starting: "DAX8" (HandOff).
     // With any script (Doc.ahk): "DAX4" (a call, JSON {id, name, args}), "DAX5" (its answer, JSON {id, result} or
     // {id, error, code}), "DAX6" (an event, JSON {event, ...}).
     const long Hello = 0x44415830, CallTag = 0x44415831, ReplyOk = 0x44415832, ReplyError = 0x44415833,
-        DocCall = 0x44415834, DocReply = 0x44415835, DocEvent = 0x44415836, RunMacroTag = 0x44415837;
+        DocCall = 0x44415834, DocReply = 0x44415835, DocEvent = 0x44415836, RunMacroTag = 0x44415837,
+        // From a second start of dAHKxodus: "DAX8", "folder\tfile" (file "": a new document), to open in a window here.
+        HandOffTag = 0x44415838;
     static string Untitled => Lang.T("file.untitled");
 
     [StructLayout(LayoutKind.Sequential)]
@@ -98,6 +111,12 @@ class MainForm : Form {
     /// The AHK script's window: bridge calls go there, and it is told when this window has closed. (The exe: 0 until
     /// its companion says hello.)
     public static IntPtr Ahk { get; private set; }
+    // The open windows, oldest first, all on the one UI thread. The first is the one the program started with: only it
+    // offers recovery copies and the last document. Later ones are new windows (New, Open, a file handed over).
+    static readonly List<MainForm> Windows = new();
+    static Task<CoreWebView2Environment>? browser;    // (one browser for every window: one profile, one process group)
+    static bool measureProcess;                        // (a measure run's windows leave the user's settings alone)
+    readonly bool firstWindow;
     readonly string dir, measureOut;
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     readonly EngineHost Engine = new();
@@ -131,10 +150,13 @@ class MainForm : Form {
     // Changes not saved: the page's, or a recovered document's.
     bool Changed => dirty || recovered;
 
-    public MainForm(IntPtr ahk, string dir, string start, string measureOut) {
+    public MainForm(IntPtr ahk, string dir, string start, string measureOut, MainForm? from = null) {
         Ahk = ahk; this.dir = dir; current = start; this.measureOut = measureOut;
+        firstWindow = Windows.Count == 0;
+        if (measureOut != "") measureProcess = true;
+        Windows.Add(this);
         // (a measure run's copies go to a folder of its own, never among the user's)
-        recovery = new Recovery(measureOut != "" ? Path.Combine(dir, "logs", "measure-recovery") : Recovery.DefaultFolder);
+        recovery = new Recovery(measureProcess ? Path.Combine(dir, "logs", "measure-recovery") : Recovery.DefaultFolder);
         // (a measure run's macro hotkeys are its own: one for the page's check, the user's untouched)
         if (measureOut != "") MacroHotkeys.Override = new(StringComparer.OrdinalIgnoreCase) { ["Insert date.ahk"] = "Ctrl+Alt+J" };
         // (and its event hooks: none, until its check sets some)
@@ -148,14 +170,21 @@ class MainForm : Form {
         Size = new System.Drawing.Size(1400, 950);
         StartPosition = FormStartPosition.CenterScreen;
         Controls.Add(web);
-        if (measureOut == "") WindowPlacement.Restore(this);    // (a measure run keeps the defaults: its runs compare)
+        if (!measureProcess) WindowPlacement.Restore(this);    // (a measure run keeps the defaults: its runs compare)
+        // A new window: a step down and to the right of the one it came from, not on top of it.
+        if (from != null && from.WindowState == FormWindowState.Normal) {
+            StartPosition = FormStartPosition.Manual;
+            var step = SystemInformation.CaptionHeight + LogicalToDeviceUnits(8);
+            Bounds = Cascaded(from.Bounds, Screen.FromControl(from).WorkingArea, step);
+        } else if (from != null && from.WindowState == FormWindowState.Maximized) WindowState = FormWindowState.Maximized;
         UpdateTitle();
         if (measureOut != "") {    // a measure run that goes wrong still closes
             var watchdog = new System.Windows.Forms.Timer { Interval = 120000 };
             watchdog.Tick += (s, e) => { Log("measure: gave up after 120 s"); closeConfirmed = true; Close(); };
             watchdog.Start();
         }
-        if (AppFolders.StartCompanion != null) HandleCreated += (s, e) => AppFolders.StartCompanion(Handle);
+        // (the exe: one companion for every window, started with the first)
+        if (AppFolders.StartCompanion != null && firstWindow) HandleCreated += (s, e) => AppFolders.StartCompanion(Handle);
         Load += async (s, e) => {
             try { await Init(); } catch (Exception ex) { Log("init failed: " + ex); if (measureOut != "") Close(); }
         };
@@ -163,7 +192,8 @@ class MainForm : Form {
 
     async Task Init() {
         var data = Path.Combine(AppFolders.Local, "WebView2");
-        var env = await CoreWebView2Environment.CreateAsync(null, data);
+        browser ??= CoreWebView2Environment.CreateAsync(null, data);
+        var env = await browser;
         await web.EnsureCoreWebView2Async(env);
         Log($"dAHKxodus {Version}, webview2 ready {clock.ElapsedMilliseconds} ms (runtime {env.BrowserVersionString})");
         DaxExtensions.Started(this);
@@ -373,8 +403,13 @@ class MainForm : Form {
             answer = dlg.ShowDialog(this);
         } finally { asking = false; }
         if (answer != DialogResult.OK) return;
-        // What changed applies now: the host's language, the recent list, and the name on new comments and changes.
         Lang.Load();
+        Everywhere(w => w.SettingsChanged());
+    }
+
+    // What changed applies now, in every window: the host's language, the recent list, the name on new comments and
+    // changes, and the autosave interval.
+    void SettingsChanged() {
         UpdateTitle();
         SendUi();
         SendRecent();
@@ -391,7 +426,8 @@ class MainForm : Form {
         // asked: a document with changes keeps its copy, which the next start offers.
         if (closeReason != CloseReason.WindowsShutDown || !Changed) ClearRecovery();
         else Log("closed by Windows with changes not saved: the recovery copy stays");
-        if (measureOut == "") {
+        Windows.Remove(this);
+        if (!measureProcess) {
             try {
                 WindowPlacement.Save(this);
                 if (view != null)
@@ -399,6 +435,7 @@ class MainForm : Form {
             } catch (Exception ex) { Log("settings at close: " + ex.Message); }
         }
         base.OnFormClosed(e);
+        if (Windows.Count == 0) Application.ExitThread();    // (the last window: the program ends)
     }
 
     void SendRecent() {
@@ -417,22 +454,23 @@ class MainForm : Form {
         } catch (Exception ex) {
             Log($"open {path} failed: {ex.Message}");
             if (measureOut == "" && !quiet) MessageBox.Show(this, Lang.T("file.openFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            if (ex is FileNotFoundException or DirectoryNotFoundException) { RecentFiles.Remove(path); SendRecent(); }
+            if (ex is FileNotFoundException or DirectoryNotFoundException) { RecentFiles.Remove(path); Everywhere(w => w.SendRecent()); }
             return false;
         }
         current = Path.GetFullPath(path);
         dirty = recovered = false;
         ClearRecovery();    // (the document before it went as the user chose)
         UpdateTitle();
-        if (measureOut == "") { RecentFiles.Add(current); SendRecent(); }
+        if (measureOut == "") { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
         Log($"open {Path.GetFileName(path)} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
         Send(new { type = "open", name = Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
         return true;
     }
 
-    async void NewDocument() {
-        if (!await CanDiscard()) return;
-        StartBlank();
+    // New (Ctrl+N, File > New): a new window, as in Word, unless this one holds only an untouched new document.
+    void NewDocument() {
+        if (Untouched) StartBlank();
+        else OpenWindow("", this);
     }
 
     void StartBlank() {
@@ -444,8 +482,8 @@ class MainForm : Form {
         Send(new { type = "blank", name = Untitled });
     }
 
-    async void OpenWithDialog() {
-        if (!await CanDiscard()) return;
+    void OpenWithDialog() {
+        if (asking) return;
         string path;
         asking = true;
         try {
@@ -456,13 +494,92 @@ class MainForm : Form {
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
             path = dlg.FileName;
         } finally { asking = false; }
-        OpenFile(path);
+        OpenPath(path);
     }
 
-    async void OpenPath(string path) {
-        if (current != "" && string.Equals(Path.GetFullPath(path), current, StringComparison.OrdinalIgnoreCase) && !Changed) return;
-        if (!await CanDiscard()) return;
-        OpenFile(path);
+    // Open (the dialog, Recent, a file dropped or handed over): the window that has it already comes to the front;
+    // else it opens here if this window holds only an untouched new document, and in a new window if not.
+    void OpenPath(string path) {
+        var full = Path.GetFullPath(path);
+        var open = Windows.FirstOrDefault(w => string.Equals(w.current, full, StringComparison.OrdinalIgnoreCase));
+        if (open != null) { open.BringForward(); return; }
+        if (Untouched) OpenFile(full);
+        else OpenWindow(full, this);
+    }
+
+    // Only a new document nobody has typed in yet: New and Open use this window instead of opening another.
+    bool Untouched => current == "" && !Changed && !asking && pageReady && recovering == null;
+
+    // ---- Several windows
+
+    /// A new window with the file (or a new document: ""), cascaded from the one it came from.
+    static MainForm OpenWindow(string file, MainForm? from) {
+        var window = new MainForm(Ahk, from?.dir ?? AppFolders.ProgramFolder, file, "", from);
+        window.Show();
+        Log($"new window ({Windows.Count} open): " + (file == "" ? "(a new document)" : Path.GetFileName(file)));
+        return window;
+    }
+
+    void BringForward() {
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+    }
+
+    /// Calls f for each open window whose page is ready (what the user changed applies to all of them).
+    static void Everywhere(Action<MainForm> f) {
+        foreach (var w in Windows.ToList())
+            if (w.pageReady && !w.IsDisposed) f(w);
+    }
+
+    /// A window's place a step down and to the right of bounds, back at the top left of the working area once it would
+    /// run off it. (AhkWord's.)
+    static System.Drawing.Rectangle Cascaded(System.Drawing.Rectangle bounds, System.Drawing.Rectangle area, int step) {
+        var moved = new System.Drawing.Rectangle(bounds.X + step, bounds.Y + step, bounds.Width, bounds.Height);
+        if (moved.Right > area.Right || moved.Bottom > area.Bottom) moved.Location = new System.Drawing.Point(area.Left + step, area.Top + step);
+        return moved;
+    }
+
+    // A second start of dAHKxodus (a .docx double-clicked, the Start menu) hands its file to the one running from the
+    // same folder, which opens it in a window here. True when a running dAHKxodus took it.
+    delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr hwnd, System.Text.StringBuilder text, int max);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(uint processId);
+
+    public static bool HandOff(string folder, string file) {
+        var candidates = new List<(IntPtr hwnd, uint pid)>();
+        var self = (uint)Environment.ProcessId;
+        EnumWindows((hwnd, _) => {
+            if (!IsWindowVisible(hwnd)) return true;
+            var title = new System.Text.StringBuilder(512);
+            GetWindowTextW(hwnd, title, title.Capacity);
+            if (!title.ToString().EndsWith(" - dAHKxodus", StringComparison.Ordinal)) return true;
+            GetWindowThreadProcessId(hwnd, out var pid);
+            if (pid != self) candidates.Add((hwnd, pid));
+            return true;
+        }, IntPtr.Zero);
+        foreach (var (hwnd, pid) in candidates) {
+            AllowSetForegroundWindow(pid);    // (so the window it opens can come to the front)
+            if (SendCopyData(hwnd, HandOffTag, Path.GetFullPath(folder) + "\t" + file, 10000, IntPtr.Zero)) return true;
+        }
+        return false;
+    }
+
+    // A file handed over by a second start: here, if it came from the same folder (another copy of dAHKxodus, such as
+    // a portable one, keeps its own).
+    bool TakeHandOff(string text) {
+        var parts = text.Split('\t', 2);
+        if (parts.Length != 2 || !string.Equals(Path.GetFullPath(parts[0]).TrimEnd('\\'), Path.GetFullPath(dir).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            return false;
+        var file = parts[1];
+        Log("handed over: " + (file == "" ? "(a new document)" : Path.GetFileName(file)));
+        BeginInvoke(() => {
+            if (file == "") OpenWindow("", this).BringForward();
+            else OpenPath(file);
+        });
+        return true;
     }
 
     // ---- Saving
@@ -516,7 +633,7 @@ class MainForm : Form {
         }
         current = Path.GetFullPath(path);
         Log($"saved {Path.GetFileName(current)} ({bytes.Length:N0} bytes)");
-        if (measureOut == "") { RecentFiles.Add(current); SendRecent(); }
+        if (measureOut == "") { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
         // The page marks the document saved (its ribbon's markSaved) and answers "dirty" false; the title loses its
         // star now, not a message later.
         Send(new { type = "savedOk", name = Path.GetFileName(current) });
@@ -606,9 +723,9 @@ class MainForm : Form {
                     pageReady = true;
                     StartAutosave();
                     // A copy left behind by a dAHKxodus that didn't close normally, offered before anything opens.
-                    if (OfferRecovery()) break;
+                    if (firstWindow && OfferRecovery()) break;
                     // Started without a document: the last one, if the user wants that (and it is still there).
-                    if (current == "" && measureOut == "" && Settings.GetBool("General", "OpenLastAtStart", false))
+                    if (firstWindow && current == "" && measureOut == "" && Settings.GetBool("General", "OpenLastAtStart", false))
                         current = RecentFiles.List().FirstOrDefault(File.Exists) ?? "";
                     if (current != "") OpenFile(current);
                     else Send(new { type = "blank", name = Untitled });
@@ -999,11 +1116,13 @@ class MainForm : Form {
     }
 
     // WM_COPYDATA to another window (wParam: this one); true when it took it (answered 1).
-    bool SendCopyData(IntPtr to, long tag, string text, int timeout) {
+    bool SendCopyData(IntPtr to, long tag, string text, int timeout) => SendCopyData(to, tag, text, timeout, Handle);
+
+    static bool SendCopyData(IntPtr to, long tag, string text, int timeout, IntPtr from) {
         var ptr = Marshal.StringToHGlobalUni(text);
         try {
             var cds = new COPYDATASTRUCT { dwData = (IntPtr)tag, cbData = (text.Length + 1) * 2, lpData = ptr };
-            return SendMessageTimeoutW(to, WM_COPYDATA, Handle, ref cds, SMTO_ABORTIFHUNG, timeout, out var answer) != IntPtr.Zero
+            return SendMessageTimeoutW(to, WM_COPYDATA, from, ref cds, SMTO_ABORTIFHUNG, timeout, out var answer) != IntPtr.Zero
                 && answer == (IntPtr)1;
         } finally {
             Marshal.FreeHGlobal(ptr);
@@ -1016,6 +1135,10 @@ class MainForm : Form {
         if (m.Msg == WM_COPYDATA) {
             var cds = Marshal.PtrToStructure<COPYDATASTRUCT>(m.LParam);
             var tag = (long)cds.dwData;
+            if (tag == HandOffTag) {
+                m.Result = (IntPtr)(TakeHandOff(Marshal.PtrToStringUni(cds.lpData, cds.cbData / 2).TrimEnd('\0')) ? 1 : 0);
+                return;
+            }
             if (tag == Hello && AppFolders.ProgramExe != null) {
                 Ahk = m.WParam;
                 Log($"companion ready {clock.ElapsedMilliseconds} ms");
@@ -1070,7 +1193,10 @@ class MainForm : Form {
         ("exportPdf", "file", "Write the document's pages as a PDF.", ["path"], "true once written"),
         ("saveCopy", "file", "Write a copy in another format, by path's extension: .html (a web page), .md (Markdown) or .txt (plain text). The document stays as it is.", ["path"], "true once written"),
         ("print", "file", "Show the print dialog.", [], null),
-        ("close", "file", "Close dAHKxodus (asks to save a changed document).", [], null),
+        ("close", "file", "Close this window (asks to save a changed document); dAHKxodus ends with its last window.", [], null),
+        ("newWindow", "file", "Open a new window, with path or a new document. Set Doc.Window to the answer to send Doc calls there.", ["path?"], "the new window (its handle)"),
+        ("setView", "view", "Page view (paginated true) or continuous (false), and the zoom: \"width\" (page width), \"page\" (one page) or a scale (1 = 100%). Either may be left out.", ["paginated?", "zoom?"], null),
+        ("view", "query", "The view: {paginated, zoom} (zoom: a scale, \"width\" or \"page\").", [], "object"),
         ("setStatus", "program", "Show a line on the status bar.", ["text"], null),
         ("log", "program", "Write a line to dAHKxodus's log (logs\\dahkxodus.log).", ["text"], null),
         ("path", "query", "The document's file; \"\" until it is saved.", [], "string"),
@@ -1168,6 +1294,40 @@ class MainForm : Form {
             case "close":
                 BeginInvoke(Close);    // (after this answer)
                 return Ok(null);
+            case "newWindow": {
+                var file = OptArg("path") is { Length: > 0 } np ? Path.GetFullPath(np) : "";
+                if (file != "" && !File.Exists(file)) throw new ScriptError("refused", $"newWindow: there is no file {file}");
+                var window = OpenWindow(file, this);
+                var ready = await Task.WhenAny(window.firstDocument.Task, Task.Delay(60000));
+                if (ready != window.firstDocument.Task || !window.firstDocument.Task.Result)
+                    throw new ScriptError("error", "newWindow: the new window did not get its document");
+                return Ok((long)window.Handle);
+            }
+            case "setView": {
+                var v = new JsonObject();
+                if (args["paginated"] is JsonValue pv)
+                    v["paginated"] = pv.TryGetValue<bool>(out var pb) ? pb
+                        : pv.TryGetValue<double>(out var pn) ? pn != 0
+                        : pv.TryGetValue<string>(out var ps) && ps.Trim() is "1" or "true" or "True" or "on";
+                if (args["zoom"] is JsonValue zv) {
+                    if (zv.TryGetValue<double>(out var zn)) v["zoom"] = zn;
+                    else if (zv.TryGetValue<string>(out var zs) && zs.Trim().ToLowerInvariant() is var zt) {
+                        if (zt is "width" or "page") v["zoom"] = zt;
+                        else if (double.TryParse(zt.TrimEnd('%'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var zp))
+                            v["zoom"] = zt.EndsWith('%') ? zp / 100 : zp;
+                        else throw new ScriptError("bad_arguments", "setView: zoom is \"width\", \"page\" or a scale (1 = 100%)");
+                    }
+                }
+                web.CoreWebView2.PostWebMessageAsJson(new JsonObject { ["type"] = "applyView", ["view"] = v }.ToJsonString());
+                return Ok(null);
+            }
+            case "view": {
+                var paginated = view != null && view.TryGetValue("Paginated", out var vp) && vp == "1";
+                JsonNode? zoom = view != null && view.TryGetValue("Zoom", out var vz)
+                    ? (double.TryParse(vz, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var zd) ? zd : vz)
+                    : null;
+                return Ok(new JsonObject { ["paginated"] = paginated, ["zoom"] = zoom });
+            }
             case "hooks":
                 var hookList = EventHooks.All();
                 var hooksOff = EventHooks.Off();
@@ -1186,7 +1346,7 @@ class MainForm : Form {
                     EventHooks.SetOn(hookEvent, on);
                 }
                 Log($"script: hook {hookEvent} = \"{EventHooks.MacroFor(hookEvent)}\"{(EventHooks.IsOn(hookEvent) ? "" : " (off)")}");
-                SendHooks();
+                Everywhere(w => w.SendHooks());
                 return Ok(null);
             case "measureDone":
                 if (measureOut == "") break;
@@ -1217,6 +1377,9 @@ class MainForm : Form {
     }
 
     // The page has a document (opened, or a new one): a script's Open or New is done, and scripts hear Opened.
+    // Done when this window's first document is in the editor (Doc.NewWindow waits for it).
+    readonly TaskCompletionSource<bool> firstDocument = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     void DocumentReady(bool ok) {
         documentWait?.TrySetResult(ok);
         documentWait = null;
@@ -1224,7 +1387,8 @@ class MainForm : Form {
         ReportModified();
         if (!ok) return;
         // The hooks: Started once, when the first document is in; Opened for each document opened from a file.
-        if (!startedHookRun) { startedHookRun = true; _ = RunHookAsync(HookEvent.Started, current); }
+        if (!startedHookRun && firstWindow) { startedHookRun = true; _ = RunHookAsync(HookEvent.Started, current); }
+        firstDocument.TrySetResult(ok);
         if (current != "" && !newRequested) _ = RunHookAsync(HookEvent.Opened, current);
     }
 
@@ -1323,7 +1487,7 @@ class MainForm : Form {
             EventHooks.Save(dlg.Result, dlg.OffResult);
             Log("hooks: " + string.Join(", ", EventHooks.All().Select(p => $"{p.Key}={p.Value}{(EventHooks.IsOn(Enum.Parse<HookEvent>(p.Key)) ? "" : " (off)")}")));
         } finally { asking = false; }
-        SendHooks();
+        Everywhere(w => w.SendHooks());
     }
 
     // (Measure runs) tests\hook-check.ahk as the BeforeSave and Saved hooks; the page then saves as Ctrl+S does. The
@@ -1383,7 +1547,7 @@ class MainForm : Form {
             return;
         } finally { asking = false; }
         SendStatus(hotkey != "" ? Lang.T("macro.savedHotkey", name, hotkey) : Lang.T("macro.saved", name));
-        SendMacros();
+        Everywhere(w => w.SendMacros());
     }
 
     // The macros, with their hotkeys, for the page's Macros list, palette and keys; and the user's ribbon buttons, each
@@ -1410,7 +1574,7 @@ class MainForm : Form {
             RibbonButtons.Save(dlg.Result);
             Log("ribbon buttons: " + string.Join(", ", RibbonButtons.All().Select(b => $"{b.Label}={b.Macro}")));
         } finally { asking = false; }
-        SendMacros();
+        Everywhere(w => w.SendMacros());
     }
 
     // The Macros tab's Hotkeys...: every macro with its hotkey; OK keeps what the user set.
@@ -1426,7 +1590,7 @@ class MainForm : Form {
             MacroHotkeys.Save(dlg.Result.Where(p => names.Contains(p.Key)).ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase));
             Log("macro hotkeys: " + string.Join(", ", MacroHotkeys.All().Select(p => $"{p.Key}={p.Value}")));
         } finally { asking = false; }
-        SendMacros();
+        Everywhere(w => w.SendMacros());
     }
 
     // A macro of the user's (not one that came with the program), to the Recycle Bin once the user says yes.
@@ -1451,7 +1615,7 @@ class MainForm : Form {
         if (!Macros.List(dir).Any(x => string.Equals(Path.GetFileName(x.path), Path.GetFileName(path), StringComparison.OrdinalIgnoreCase)))
             MacroHotkeys.Set(Path.GetFileName(path), "");
         SendStatus(Lang.T("macro.deleted", name));
-        SendMacros();
+        Everywhere(w => w.SendMacros());
     }
 
     // (Measure runs) The recording goes to logs\measure-recorded.ahk, no dialog; measureRunRecorded replays it.

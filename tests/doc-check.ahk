@@ -80,6 +80,20 @@ try {
             && Doc.Path = Doc_FullPath(path), copy)
     }
 
+    ; a second window: Doc.NewWindow opens it and answers with it; Doc.SetView and Doc.View there; then it closes
+    first := Doc.Window || EnvGet("DAHKXODUS_HWND") + 0
+    second := Doc.NewWindow()
+    Check("newWindow", second && second != first && WinExist("ahk_id " second) && WinGetPID("ahk_id " second) = WinGetPID("ahk_id " first), second)
+    Doc.Window := second
+    Doc.SetView(true, "width")
+    Sleep(500)
+    v := Doc.View
+    Check("setView", v.paginated = true && v.zoom = "width", v.paginated " " v.zoom)
+    Doc.Close()
+    Doc.Window := first
+    Sleep(1000)
+    Check("closeWindow", !WinExist("ahk_id " second) && WinExist("ahk_id " first) && Doc.Name = "measure-doc.docx")
+
     Sleep(600)    ; (events come as they happen: TextChanged after a pause)
     Check("events", events.Has("Opened") && events.Has("Saved") && events.Has("TextChanged")
         && events.Has("Command:bold") && events.Has("Modified:1") && events.Has("Modified:0"))

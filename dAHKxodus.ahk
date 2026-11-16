@@ -32,7 +32,6 @@ BridgeReceive(wParam, lParam, msg, hwnd) {
     if tag != 0x44415831 && tag != 0x44415837
         return
     text := RTrim(StrGet(NumGet(lParam, 16, "ptr"), NumGet(lParam, 8, "uint") // 2, "UTF-16"), Chr(0))
-    Doc.Window := wParam    ; (this script's Doc calls go to that window)
     SetTimer(BridgeRun.Bind(wParam, tag, text), -1)
     return 1
 }
@@ -40,6 +39,10 @@ BridgeReceive(wParam, lParam, msg, hwnd) {
 BridgeRun(editor, tag, text) {
     parts := StrSplit(text, "`t", , tag = 0x44415837 ? 4 : 3)
     id := parts[1]
+    ; This call's Doc calls go to the window that made it. Several windows share this script: a call from another
+    ; window may interrupt this one, and puts Doc.Window back when it ends.
+    before := Doc.Window
+    Doc.Window := editor
     try {
         if tag = 0x44415837 {
             ; a macro: its own AutoHotkey process, told which window to drive (Doc.ahk reads DAHKXODUS_HWND); an event
@@ -63,6 +66,7 @@ BridgeRun(editor, tag, text) {
     } catch as e {
         result := e.Message, answer := 0x44415833
     }
+    Doc.Window := before
     reply := id "`t" result
     cds := Buffer(24, 0)
     NumPut("uptr", answer, cds, 0)
@@ -74,8 +78,8 @@ BridgeRun(editor, tag, text) {
 
 ; dAHKxodus.exe (vs\dAHKxodus.csproj) is the program and starts this script beside it as the bridge's AutoHotkey side:
 ;   AutoHotkey64.exe dAHKxodus.ahk /companion <window>
-; It tells that window its own (WM_COPYDATA "DAX0"), answers its calls, and ends when the window is gone (the window
-; posts WM_APP + 1 as it closes; the timer catches a window that ended without saying so).
+; It tells that window its own (WM_COPYDATA "DAX0"), answers the calls of every dAHKxodus window, and ends with the
+; program (its last window posts WM_APP + 1 as it closes; the timer catches a program that ended without saying so).
 if A_Args.Length >= 2 && A_Args[1] = "/companion" {
     Editor := A_Args[2] + 0
     Doc.Window := Editor
@@ -85,7 +89,8 @@ if A_Args.Length >= 2 && A_Args[1] = "/companion" {
     try SendMessage(0x004A, A_ScriptHwnd, cds.Ptr, , "ahk_id " Editor, , , , 10000)
     catch
         ExitApp(1)
-    SetTimer(() => WinExist("ahk_id " Editor) || ExitApp(), 1000)
+    EditorProcess := WinGetPID("ahk_id " Editor)
+    SetTimer(() => ProcessExist(EditorProcess) || ExitApp(), 1000)
     return
 }
 

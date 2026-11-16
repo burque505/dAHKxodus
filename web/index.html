@@ -1608,6 +1608,9 @@ host?.addEventListener("message", async (e) => {
       snapshot(m.id);
     } else if (m.type === "status") {
       ribbon.setStatus(m.text);
+    } else if (m.type === "applyView") {    // a script's Doc.SetView: page view or continuous, and the zoom
+      applyView(m.view ?? {});
+      reportView();
     } else if (m.type === "measureReply") {
       const resolve = measureWaiters.get(m.what);
       measureWaiters.delete(m.what);

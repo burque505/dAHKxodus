@@ -19,6 +19,7 @@ public sealed class Recovery {
     public sealed record Orphan(Info Info, string DocxPath, string InfoPath);
 
     readonly string id;
+    static int windows;
     readonly int processId;
     readonly long processStart;
     byte[]? writtenHash;    // the copy written last (null: there is none now)
@@ -28,7 +29,7 @@ public sealed class Recovery {
         using var process = Process.GetCurrentProcess();
         processId = process.Id;
         processStart = process.StartTime.ToUniversalTime().Ticks;
-        id = $"{processId}-{processStart}";
+        id = $"{processId}-{processStart}-{Interlocked.Increment(ref windows)}";    // (each window a copy of its own)
     }
 
     /// %LOCALAPPDATA%\dAHKxodus\Recovery (portable: data\Recovery beside the program).
