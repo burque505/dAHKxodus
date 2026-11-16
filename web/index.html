@@ -858,6 +858,7 @@ window.addEventListener("afterprint", () => printDone());
 const hostFileMenu = () => [
   { id: "print", label: ui.print ?? "Print…", title: ui.printTip ?? "", shortcut: "Ctrl+P", separatorBefore: true },
   { id: "pdf", label: ui.pdf ?? "Export to PDF…", title: ui.pdfTip ?? "" },
+  { id: "copy", label: ui.copy ?? "Save a Copy As…", title: ui.copyTip ?? "" },
   { id: "settings", label: ui.settings, title: ui.settingsTip, shortcut: "Ctrl+,", separatorBefore: true },
   { id: "close", label: ui.close, title: ui.closeTip, separatorBefore: true },
 ];
@@ -1776,7 +1777,8 @@ ribbon = mountRibbon("#app", {
   onFileMenu: (id) => {
     if (id === "print") recordLine("Doc.Print()");
     else if (id === "pdf") recordLine("; " + ui.recordSkipped.replace("{0}", ui.pdf ?? "Export to PDF"));
-    post({ type: { settings: "settingsRequest", close: "closeRequest", print: "printRequest", pdf: "pdfRequest" }[id] ?? "fileMenu", id });
+    else if (id === "copy") recordLine("; " + ui.recordSkipped.replace("{0}", ui.copy ?? "Save a Copy As"));
+    post({ type: { settings: "settingsRequest", close: "closeRequest", print: "printRequest", pdf: "pdfRequest", copy: "copyRequest" }[id] ?? "fileMenu", id });
   },
   onOpen: () => ribbon && addAhkButton(),
   // Scripts' Command event (a macro recorder's source later), and TextChanged after a command.

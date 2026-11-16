@@ -8,6 +8,12 @@ $read = { param($path) Get-Content -Raw -Encoding utf8 $path | ConvertFrom-Json 
 $en = & $read (Join-Path $folder "en.json")
 $placeholders = { param($text) ([regex]::Matches($text, "\{\d+\}") | ForEach-Object Value | Sort-Object -Unique) -join " " }
 $failed = 0
+# Every file must parse as the host reads it (System.Text.Json, strict): ConvertFrom-Json also takes what the host
+# refuses, such as a line break inside a string, and the host then shows the keys instead of the texts.
+foreach ($file in Get-ChildItem $folder -Filter *.json) {
+    try { [System.Text.Json.JsonDocument]::Parse([System.IO.File]::ReadAllText($file.FullName)).Dispose() }
+    catch { Write-Host "FAILED $($file.Name): not valid JSON: $($_.Exception.InnerException.Message ?? $_.Exception.Message)"; $failed++ }
+}
 foreach ($file in Get-ChildItem $folder -Filter *.json | Where-Object { $_.Name -ne "en.json" -and $_.Name -notlike "*.ribbon.json" }) {
     $other = & $read $file.FullName
     foreach ($key in $en.Keys) {

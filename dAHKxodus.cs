@@ -12,6 +12,7 @@
 #load "host\Lang.cs"
 #load "host\SettingsDialog.cs"
 #load "host\Recovery.cs"
+#load "host\Formats.cs"
 #load "host\MacroHotkeys.cs"
 #load "host\MacroDialog.cs"
 #load "host\Hooks.cs"
@@ -345,6 +346,7 @@ class MainForm : Form {
         ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"), macros = Lang.T("page.macros"), macrosTip = Lang.T("page.macrosTip"),
         close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"), hint = Lang.T("page.hint"),
         print = Lang.T("page.print"), printTip = Lang.T("page.printTip"), pdf = Lang.T("page.pdf"), pdfTip = Lang.T("page.pdfTip"),
+        copy = Lang.T("page.copy"), copyTip = Lang.T("page.copyTip"),
         palette = Lang.T("page.palette"), paletteTip = Lang.T("page.paletteTip"), palettePlaceholder = Lang.T("page.palettePlaceholder"),
         paletteOn = Lang.T("page.paletteOn"), paletteNotNow = Lang.T("page.paletteNotNow"), paletteFile = Lang.T("page.paletteFile"),
         paletteMacro = Lang.T("page.paletteMacro"), paletteTitleBar = Lang.T("page.paletteTitleBar"),
@@ -670,6 +672,9 @@ class MainForm : Form {
                 case "pdfRequest":    // File > Export to PDF
                     BeginInvoke(() => ExportPdf());
                     break;
+                case "copyRequest":    // File > Save a Copy As (HTML, Markdown, plain text)
+                    BeginInvoke(() => _ = SaveCopyAsync(null));
+                    break;
                 case "measurePdf":    // (measure runs) a PDF beside the measure copy, no dialog
                     if (measureOut != "") ExportPdf(Path.ChangeExtension(measureOut, ".pdf"));
                     break;
@@ -841,6 +846,44 @@ class MainForm : Form {
 
     // File > Export to PDF: asks where (the document's name and folder to start), writes the PDF, puts the view back.
     async void ExportPdf(string? path = null) => await ExportPdfAsync(path);
+
+    // ---- Save a Copy As
+
+    // The document in another format (Formats: .html, .md, .txt), from the bytes Save would write; the window goes on
+    // with the .docx, which stays as it is (changed or not). Quiet (a script's Doc.SaveCopy): no dialog, no message.
+    async Task<bool> SaveCopyAsync(string? path, bool quiet = false) {
+        if (asking || web.CoreWebView2 == null || !pageReady) return false;
+        if (path == null) {
+            asking = true;
+            try {
+                using var dlg = new SaveFileDialog {
+                    Filter = Lang.T("file.filterCopy"), FileName = Path.GetFileNameWithoutExtension(DocName), OverwritePrompt = true, AddExtension = true,
+                    FilterIndex = Math.Clamp(Settings.GetInt("General", "CopyFormat", 1), 1, Formats.Extensions.Length),
+                    InitialDirectory = current != "" ? Path.GetDirectoryName(current) : "",
+                };
+                if (dlg.ShowDialog(this) != DialogResult.OK) return false;
+                path = dlg.FileName;
+                // (a name typed with another extension than the type chosen: the extension decides)
+                if (!Formats.Supported(path)) path += Formats.Extensions[dlg.FilterIndex - 1];
+                Settings.Set("General", "CopyFormat", dlg.FilterIndex.ToString());
+            } finally { asking = false; }
+        }
+        var clock = Stopwatch.StartNew();
+        try {
+            var bytes = await SnapshotAsync() ?? throw new InvalidOperationException(Lang.T("file.copyNoDocument"));
+            var title = Path.GetFileNameWithoutExtension(DocName);
+            var target = path;
+            var text = await Task.Run(() => Formats.Convert(bytes, target, title));
+            await Task.Run(() => Formats.Write(target, text));
+            Log($"copy: {Path.GetFileName(path)} written ({text.Length:N0} chars, {clock.ElapsedMilliseconds} ms)");
+            if (!quiet) SendStatus(Lang.T("file.copySaved", path));
+            return true;
+        } catch (Exception ex) {
+            Log($"copy {path} failed: {ex}");
+            if (!quiet) MessageBox.Show(this, Lang.T("file.copyFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+    }
 
     // Quiet (a script's Doc.ExportPdf): no message, no measure check; the result says whether the PDF was written.
     async Task<bool> ExportPdfAsync(string? path, bool quiet = false) {
@@ -1025,6 +1068,7 @@ class MainForm : Form {
         ("open", "file", "Open a .docx (asks to save the one open first, if it has changes).", ["path"], "true, or false when it could not be opened or the user cancelled"),
         ("save", "file", "Save the document: to its file (asking where if it has none), or to path.", ["path?"], "true once written, false when not"),
         ("exportPdf", "file", "Write the document's pages as a PDF.", ["path"], "true once written"),
+        ("saveCopy", "file", "Write a copy in another format, by path's extension: .html (a web page), .md (Markdown) or .txt (plain text). The document stays as it is.", ["path"], "true once written"),
         ("print", "file", "Show the print dialog.", [], null),
         ("close", "file", "Close dAHKxodus (asks to save a changed document).", [], null),
         ("setStatus", "program", "Show a line on the status bar.", ["text"], null),
@@ -1112,6 +1156,11 @@ class MainForm : Form {
             case "exportPdf":
                 NotAsking();
                 return Ok(await ExportPdfAsync(Path.GetFullPath(Arg("path")), quiet: true));
+            case "saveCopy":
+                NotAsking();
+                var copyPath = Path.GetFullPath(Arg("path"));
+                if (!Formats.Supported(copyPath)) throw new ScriptError("bad_arguments", "saveCopy: a copy is .html, .md or .txt, not " + Path.GetExtension(copyPath));
+                return Ok(await SaveCopyAsync(copyPath, quiet: true));
             case "print":
                 NotAsking();
                 BeginInvoke(Print);

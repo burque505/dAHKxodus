@@ -73,6 +73,12 @@ try {
     pdf := A_ScriptDir "\..\logs\measure-doc.pdf"
     try FileDelete(pdf)
     Check("exportPdf", Doc.ExportPdf(pdf) = true && FileExist(pdf))
+    for ext in [".html", ".md", ".txt"] {
+        copy := A_ScriptDir "\..\logs\measure-doc" ext
+        try FileDelete(copy)
+        Check("saveCopy " ext, Doc.SaveCopy(copy) = true && InStr(FileRead(copy, "UTF-8"), "Hello from Doc.ahk")
+            && Doc.Path = Doc_FullPath(path), copy)
+    }
 
     Sleep(600)    ; (events come as they happen: TextChanged after a pause)
     Check("events", events.Has("Opened") && events.Has("Saved") && events.Has("TextChanged")

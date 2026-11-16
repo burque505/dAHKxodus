@@ -1,0 +1,31 @@
+# Verify mix
+
+A plain paragraph to type into. Add a word here.
+
+## Table
+
+| Item | Quantity | Notes |
+| --- | --- | --- |
+| Apples | 12 | Merged across two rows on the left |
+|   | 7 | Nested 1.1Nested 1.2Nested 2.1Nested 2.2After the nested table |
+| Total spans two columns | 19 |
+
+## Image
+
+The picture above is a gradient.
+
+## Comments
+
+This sentence has a comment on these words and ends here.
+
+A whole paragraph with a second comment.
+
+## Tracked changes
+
+Tracked changes: the meeting is on Tuesday at ten in room 4.
+
+## Undo
+
+Type here, then undo and redo.
+
+Last paragraph.

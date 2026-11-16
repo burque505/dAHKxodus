@@ -17,16 +17,19 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   recovery, settings, print and PDF; the first installer preview, in a full and a light edition
 - [x] **3. AutoHotkey** (0.0.3.0): a `Doc` object for scripts, with events; the command palette; macro recording and hotkeys;
   event hooks; your own buttons on the ribbon
-- [ ] **4. Paste and paragraphs:** pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
+- [ ] **4. Other formats:** File > Save a Copy As: a web page (.html), Markdown (.md) or plain text (.txt), made by
+  Docxodus's own converters; the window goes on with the .docx. `Doc.SaveCopy` for scripts
+- [ ] **5. Paste and paragraphs:** pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
   dialog (exact indents, tab stops, keep with next...); multilevel lists as in AhkWord (define, change and keep each
   level's number format, text such as 1.1.1., indent and start; all nine levels); Format Painter; Change Case; more
   find options
-- [ ] **5. Pages:** the ruler; section breaks; columns; line numbers; table and picture properties
-- [ ] **6. References and styles:** cross-references, updating the table of contents and fields, bookmarks; new and
+- [ ] **6. Pages:** the ruler; section breaks; columns; line numbers; table and picture properties
+- [ ] **7. References and styles:** cross-references, updating the table of contents and fields, bookmarks; new and
   changed styles, Copy Styles from Document
-- [ ] **7. Formats and parts:** Markdown, HTML, plain text, RTF, OpenDocument; templates and snippets
-- [ ] **8. Spanish:** the whole program, the ribbon included
-- [ ] **9. Text boxes:** editing in them, then inserting and moving them
+- [ ] **8. Formats and parts:** RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
+  Word or Pandoc); opening those formats; templates and snippets
+- [ ] **9. Spanish:** the whole program, the ribbon included
+- [ ] **10. Text boxes:** editing in them, then inserting and moving them
 
 Alongside every milestone: faster opening of long documents, and the fork kept level with Docxodus itself.
 

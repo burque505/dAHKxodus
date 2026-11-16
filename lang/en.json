@@ -8,6 +8,10 @@
   "file.saveFailed": "dAHKxodus could not save {0}:\n\n{1}",
   "file.askSave": "Do you want to save the changes to {0}?",
   "file.filterPdf": "PDF (*.pdf)|*.pdf",
+  "file.filterCopy": "Web page (*.html)|*.html|Markdown (*.md)|*.md|Plain text (*.txt)|*.txt",
+  "file.copySaved": "Copy saved: {0}",
+  "file.copyFailed": "dAHKxodus could not write the copy {0}:\n\n{1}",
+  "file.copyNoDocument": "the editor did not give the document",
 
   "bridge.noAnswer": "AutoHotkey did not answer",
   "bridge.notRunning": "AutoHotkey is not running",
@@ -115,6 +119,8 @@
   "page.printTip": "Print the document (Ctrl+P)",
   "page.pdf": "Export to PDF…",
   "page.pdfTip": "Save the document's pages as a PDF",
+  "page.copy": "Save a Copy As…",
+  "page.copyTip": "Save a copy as a web page, Markdown or plain text (the document itself stays a .docx)",
 
   "identity.office": "Office user information",
   "identity.windows": "the Windows account",

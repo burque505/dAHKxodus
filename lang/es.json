@@ -8,6 +8,10 @@
   "file.saveFailed": "dAHKxodus no pudo guardar {0}:\n\n{1}",
   "file.askSave": "¿Desea guardar los cambios en {0}?",
   "file.filterPdf": "PDF (*.pdf)|*.pdf",
+  "file.filterCopy": "Página web (*.html)|*.html|Markdown (*.md)|*.md|Texto sin formato (*.txt)|*.txt",
+  "file.copySaved": "Copia guardada: {0}",
+  "file.copyFailed": "dAHKxodus no pudo escribir la copia {0}:\n\n{1}",
+  "file.copyNoDocument": "el editor no entregó el documento",
 
   "bridge.noAnswer": "AutoHotkey no respondió",
   "bridge.notRunning": "AutoHotkey no se está ejecutando",
@@ -115,6 +119,8 @@
   "page.printTip": "Imprimir el documento (Ctrl+P)",
   "page.pdf": "Exportar a PDF…",
   "page.pdfTip": "Guardar las páginas del documento como PDF",
+  "page.copy": "Guardar una copia como…",
+  "page.copyTip": "Guardar una copia como página web, Markdown o texto sin formato (el documento sigue siendo un .docx)",
 
   "identity.office": "la información de usuario de Office",
   "identity.windows": "la cuenta de Windows",
