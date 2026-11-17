@@ -317,5 +317,22 @@
   "OK": "Aceptar",
   "Type a measurement, such as 1.5\" or 2 cm.": "Escriba una medida, como 2 cm o 1,5\".",
   "Type a size in points, such as 6 pt, or 0.": "Escriba un tamaño en puntos, como 6 pt, o 0.",
-  "Type how many lines, such as 1.15.": "Escriba cuántas líneas, como 1,15."
+  "Type how many lines, such as 1.15.": "Escriba cuántas líneas, como 1,15.",
+  "Legal numbering (1., 1.1, 1.1.1)": "Numeración legal (1., 1.1, 1.1.1)",
+  "1. 1.1 1.1.1 Legal": "1. 1.1 1.1.1 Legal",
+  "Restart numbering": "Reiniciar numeración",
+  "Continue numbering": "Continuar numeración",
+  "List levels…": "Niveles de lista…",
+  "List levels": "Niveles de lista",
+  "Legal numbering (1.1, 1.1.1)": "Numeración legal (1.1, 1.1.1)",
+  "Periods": "Puntos",
+  "Level": "Nivel",
+  "Punctuation": "Puntuación",
+  "Start": "Inicio",
+  "Number at": "Número en",
+  "Text at": "Texto en",
+  "Also for new documents": "También para documentos nuevos",
+  "Type a start number, 0 or more.": "Escriba un número de inicio, 0 o más.",
+  "(no number)": "(sin número)",
+  "(as it is)": "(como está)"
 }

@@ -724,6 +724,7 @@ class MainForm : Form {
                     if (measureOut == "") SendRecent();
                     SendMacros();    // (their hotkeys work from the start)
                     SendHooks();
+                    SendListDefaults();
                     pageReady = true;
                     StartAutosave();
                     // A copy left behind by a dAHKxodus that didn't close normally, offered before anything opens.
@@ -847,6 +848,10 @@ class MainForm : Form {
                     break;
                 case "hooksRequest":    // the Macros tab's Event hooks...
                     BeginInvoke(ShowHooks);
+                    break;
+                case "listDefaults":    // List levels > Also for new documents: [Lists] Defaults, for every window
+                    if (measureOut != "") { Log("list defaults (measure run, not kept): " + Str("levels")); break; }
+                    Settings.Set("Lists", "Defaults", Str("levels"));
                     break;
                 case "measureResize":    // (measure runs) the window narrower or back, as a snap to one side does
                     if (measureOut != "") {
@@ -1488,6 +1493,13 @@ class MainForm : Form {
     }
 
     // The page saves through the host when a BeforeSave hook is on (it runs before the document's bytes are taken).
+    // The list levels new lists start from (List levels > Also for new documents): a JSON array of levels, as the
+    // editor's setListLevels takes them. A measure run starts from the engine's own.
+    void SendListDefaults() {
+        var levels = measureOut == "" ? Settings.Get("Lists", "Defaults") : "";
+        if (levels != "") Send(new { type = "listDefaults", levels });
+    }
+
     void SendHooks() {
         if (web.CoreWebView2 == null) return;
         Send(new { type = "hooks", beforeSave = EventHooks.MacroFor(HookEvent.BeforeSave) != "" && EventHooks.IsOn(HookEvent.BeforeSave) });

@@ -456,6 +456,50 @@ async function hotkeyChecks() {
   return out.join(", ");
 }
 
+// Multilevel lists: the 1.1 button (legal numbering) over the whole document (Ctrl+A), a paragraph a level in by Tab,
+// the List Levels dialog in the language's unit, restart, and the palette's entries.
+async function listChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("lists.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "Scope\nDefinitions\nPayment" });
+  await frame();
+  const blocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'));
+  const numbers = () => blocks().map((b) => Array.from(b.querySelectorAll(":scope > [data-list-marker]")).map((m) => m.textContent).join("").replace(/\s+/g, " ").trim());
+  const key = (el, k, extra = {}) => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...extra }));
+  blocks()[0].focus();
+  key(blocks()[0], "a", { ctrlKey: true });
+  document.querySelector('#app [data-dxr="legallist"]').click();
+  await frame();
+  out.push(`legal ${numbers().join(" ") === "1. 2. 3." ? "ok" : `FAILED (${numbers().join(" ")})`}`);
+  blocks()[1].focus();
+  key(blocks()[1], "Tab");
+  await frame();
+  out.push(`level ${numbers().join(" ") === "1. 1.1 2." ? "ok" : `FAILED (${numbers().join(" ")})`}`);
+  const levels = ribbon.exec("listLevels");
+  out.push(`levels ${levels?.[1]?.text === "%1.%2" ? "ok" : `FAILED (${JSON.stringify(levels?.[1])})`}`);
+  blocks()[2].focus();
+  ribbon.exec("restartNumbering", { start: 5 });
+  await frame();
+  out.push(`restart ${numbers()[2] === "5." ? "ok" : `FAILED (${numbers().join(" ")})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${numbers()[2] === "2." ? "ok" : `FAILED (${numbers().join(" ")})`}`);
+  blocks()[0].focus();
+  out.push(`dialog ${ribbon.openListDialog() ? "ok" : "FAILED"}`);
+  const dialog = document.querySelector('#app dialog[data-dxr="listdialog"]');
+  const textAt = dialog?.querySelector('tr[data-level="0"] [data-ld-field="text"]')?.value;
+  const want = ui.units === "cm" ? "0.64 cm" : '0.25"';
+  out.push(`unit ${textAt === want ? "ok" : `FAILED (${JSON.stringify(textAt)})`}`);
+  dialog?.querySelector('button[value="cancel"]')?.click();
+  out.push(`closed ${dialog && !dialog.open ? "ok" : "FAILED"}`);
+  const listed = paletteItems().filter((i) => i.key === "s:listmenu:levels" || i.key === "b:legallist");
+  out.push(`palette ${listed.length === 2 && listed.find((i) => i.key === "b:legallist")?.keys === "Ctrl+Shift+G" ? "ok" : `FAILED (${JSON.stringify(listed.map((i) => [i.key, i.keys]))})`}`);
+  return out.join(", ");
+}
+
 // The Paragraph dialog (the ribbon's): it opens in the language's unit, OK sets what changed as one undo step, and the
 // palette lists it once.
 async function paragraphDialogChecks() {
@@ -831,6 +875,9 @@ function relabel() {
   if (!ribbon) return;
   ribbon.setLabels(ui.ribbon ?? {});
   if (ui.units) ribbon.setMeasurementUnit(ui.units);    // the Paragraph dialog's indents: "in" or "cm" (lang\<code>.json)
+  // Legal numbering's key (AhkWord's), shown where the palette reads a control's keys: its title's end.
+  const legal = document.querySelector('#app [data-dxr="legallist"]');
+  if (legal && !legal.title.endsWith("(Ctrl+Shift+G)")) legal.title += " (Ctrl+Shift+G)";
   const hint = document.querySelector("#app [data-dxr-hint]");
   if (hint && ui.hint) hint.innerHTML = ui.hint;    // (the host's own text, from lang\<code>.json)
 }
@@ -959,7 +1006,8 @@ function takenShortcuts() {
     ["Ctrl+X", "Cut"], ["Ctrl+V", "Paste"], ["Ctrl+S", tr("Save")], ["Ctrl+Shift+S", tr("Save As…")], ["F12", tr("Save As…")],
     ["Ctrl+N", tr("New")], ["Ctrl+O", tr("Open…")], ["Ctrl+P", ui.print ?? "Print…"], ["Ctrl+,", ui.settings],
     ["Ctrl+Shift+P", ui.palette], ["Ctrl+Shift+R", ui.record], ["Alt+F", tr("File")], ["Ctrl+B", tr("Bold")],
-    ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")]])
+    ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")],
+    ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")]])
     taken.push({ keys, name });
   return taken;
 }
@@ -1659,6 +1707,9 @@ host?.addEventListener("message", async (e) => {
     } else if (m.type === "captured") {
       captureWaiters.get(m.name)?.();
       captureWaiters.delete(m.name);
+    } else if (m.type === "listDefaults") {
+      // The levels new lists start from (List levels > Also for new documents), kept by the host.
+      try { ribbon.setListDefaults(JSON.parse(m.levels)); } catch (error) { post({ type: "log", text: "list defaults: " + error }); }
     } else if (m.type === "ui") {
       Object.assign(ui, m);
       relabel();
@@ -1719,6 +1770,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "recording: " + (await recordingChecks()) });
       post({ type: "log", text: "hotkeys: " + (await hotkeyChecks()) });
       post({ type: "log", text: "paragraph dialog: " + (await paragraphDialogChecks()) });
+      post({ type: "log", text: "lists: " + (await listChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
@@ -1760,6 +1812,11 @@ window.addEventListener("keydown", (e) => {
   let message = null;
   if (key === "f12" && !ctrl && !e.shiftKey) message = "saveAsRequest";
   else if (ctrl && e.shiftKey && key === "s") message = "saveAsRequest";
+  else if (ctrl && e.shiftKey && key === "g") {    // legal numbering, 1. 1.1 1.1.1 (AhkWord's key)
+    e.preventDefault();
+    document.querySelector('#app [data-dxr="legallist"]')?.click();
+    return;
+  }
   else if (ctrl && !e.shiftKey && key === "n") message = "newRequest";
   else if (ctrl && !e.shiftKey && key === "o") message = "openRequest";
   else if (ctrl && !e.shiftKey && key === ",") message = "settingsRequest";
@@ -1803,6 +1860,8 @@ ribbon = mountRibbon("#app", {
   // opens in continuous view, and applyView switches to page view once it is in, as the user's click would.)
   ...(who.get("user") ? { commentAuthor: who.get("user"), revisionAuthor: who.get("user"), commentInitials: who.get("initials") ?? "" } : {}),
   typingUndo: "word",    // Undo takes typing back a word at a time, as in Word (the engine answers natively, in ms)
+  // List levels > Also for new documents: the host keeps them ([Lists] Defaults) for every window and document.
+  onListDefaults: (levels) => post({ type: "listDefaults", levels: JSON.stringify(levels) }),
   // Paste: Word's clipboard HTML names its pictures as files in the temporary folder, which the page cannot read; the
   // host reads them (EngineHost.ReadPastedImage). Pictures on the web the page fetches itself.
   resolvePasteImage: async (src) => {
