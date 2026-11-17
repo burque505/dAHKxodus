@@ -456,6 +456,34 @@ async function hotkeyChecks() {
   return out.join(", ");
 }
 
+// The Paragraph dialog (the ribbon's): it opens in the language's unit, OK sets what changed as one undo step, and the
+// palette lists it once.
+async function paragraphDialogChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("paragraph.docx");
+  caretAtStart(); relabel();
+  await frame();
+  ribbon.exec("insertText", { text: "A paragraph for the dialog." });
+  out.push(`opens ${ribbon.openParagraphDialog() ? "ok" : "FAILED"}`);
+  const dialog = document.querySelector('#app dialog[data-dxr="paradialog"]');
+  const left = dialog?.querySelector('[data-pd="left"]');
+  const unit = ui.units === "cm" ? " cm" : '"';
+  out.push(`unit ${left?.value === "0" + unit ? "ok" : `FAILED (${JSON.stringify(left?.value)})`}`);
+  if (!left) return out.join(", ");
+  left.value = "1 in";
+  left.dispatchEvent(new Event("input", { bubbles: true }));
+  dialog.querySelector('button[value="ok"]').click();
+  await frame();
+  const indent = () => ribbon.exec("paragraphFormats")[0]?.leftIndent;
+  out.push(`applied ${!dialog.open && indent() === 1440 ? "ok" : `FAILED (open ${dialog.open}, ${indent()})`}`);
+  ribbon.exec("undo");
+  out.push(`one undo ${indent() === 0 ? "ok" : `FAILED (${indent()})`}`);
+  const listed = paletteItems().filter((i) => i.key === "b:paralaunch" || i.key === "b:paralaunchlayout");
+  out.push(`palette ${listed.length === 1 ? "ok" : `FAILED (${listed.length})`}`);
+  return out.join(", ");
+}
+
 // A new, empty document, the window narrowed as a snap to one side does, the focus gone (as the snap takes it): a
 // click on the page below the one paragraph puts the caret in it, and typing goes there.
 async function emptyResizeChecks(paginated) {
@@ -802,6 +830,7 @@ const ui = {
 function relabel() {
   if (!ribbon) return;
   ribbon.setLabels(ui.ribbon ?? {});
+  if (ui.units) ribbon.setMeasurementUnit(ui.units);    // the Paragraph dialog's indents: "in" or "cm" (lang\<code>.json)
   const hint = document.querySelector("#app [data-dxr-hint]");
   if (hint && ui.hint) hint.innerHTML = ui.hint;    // (the host's own text, from lang\<code>.json)
 }
@@ -1219,7 +1248,7 @@ document.addEventListener("keydown", (e) => {
     recordLine(docCall("moveCaret", { to: e.key === "Home" ? "documentStart" : "documentEnd" }));
     return;
   }
-  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key) || (ctrl && e.key.toLowerCase() === "a")) {
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key) || (ctrl && (e.key ?? "").toLowerCase() === "a")) {
     if (recorder.typed) recordLine("");
     recorder.moved = true;
   } else if (e.key === "Backspace" || e.key === "Delete") {
@@ -1289,8 +1318,10 @@ function paletteItems() {
     names.add(item.name.toLowerCase());
     items.push(item);
   };
-  const skip = (el) => !!el.closest('.dxr-pop, [data-dxr="findbar"], [data-dxr="loader"], .dax-palette-back, .dax-macromenu')
-    || el.type === "file" || el.dataset.dxr === "filebutton" || el.dataset.dxr === "save" || el.dataset.dxr === "pastemore";
+  // (the Paragraph dialog's own fields; its launcher listed once, from Home)
+  const skip = (el) => !!el.closest('.dxr-pop, .dxr-dialog, [data-dxr="findbar"], [data-dxr="loader"], .dax-palette-back, .dax-macromenu')
+    || el.type === "file" || el.dataset.dxr === "filebutton" || el.dataset.dxr === "save" || el.dataset.dxr === "pastemore"
+    || el.dataset.dxr === "paralaunchlayout";
   for (const el of root.querySelectorAll("button, input[type=checkbox]")) {
     if (skip(el)) continue;
     const off = el.disabled || el.getAttribute("aria-disabled") === "true" || inHiddenTab(el);
@@ -1687,6 +1718,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "table picker: " + (await tablePickerChecks()) });
       post({ type: "log", text: "recording: " + (await recordingChecks()) });
       post({ type: "log", text: "hotkeys: " + (await hotkeyChecks()) });
+      post({ type: "log", text: "paragraph dialog: " + (await paragraphDialogChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
@@ -1712,7 +1744,7 @@ host?.addEventListener("message", async (e) => {
 // capture phase), as the ribbon's own Ctrl+R (align right) and Ctrl+P would take them first.
 window.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
-  const key = e.key.toLowerCase();
+  const key = (e.key ?? "").toLowerCase();    // (no key: an autofill pick in a text box)
   if (key !== "p" && key !== "r") return;
   e.preventDefault();
   e.stopPropagation();
@@ -1723,7 +1755,7 @@ window.addEventListener("keydown", (e) => {
 // Ctrl+O are the ribbon's while the focus is inside it; here they also work when it isn't (nothing focused yet).
 window.addEventListener("keydown", (e) => {
   if (e.defaultPrevented || e.altKey) return;
-  const key = e.key.toLowerCase();
+  const key = (e.key ?? "").toLowerCase();
   const ctrl = e.ctrlKey || e.metaKey;
   let message = null;
   if (key === "f12" && !ctrl && !e.shiftKey) message = "saveAsRequest";

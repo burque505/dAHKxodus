@@ -78,6 +78,7 @@
   "rbuttons.up": "Move up",
   "rbuttons.down": "Move down",
 
+  "page.units": "in",
   "page.settings": "Settings",
   "page.settingsTip": "dAHKxodus's settings (Ctrl+,)",
   "page.ahk": "Insert legal date",

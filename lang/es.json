@@ -78,6 +78,7 @@
   "rbuttons.up": "Subir",
   "rbuttons.down": "Bajar",
 
+  "page.units": "cm",
   "page.settings": "Configuración",
   "page.settingsTip": "Configuración de dAHKxodus (Ctrl+,)",
   "page.ahk": "Insertar fecha legal",

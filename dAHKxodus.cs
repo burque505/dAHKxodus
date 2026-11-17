@@ -376,7 +376,7 @@ class MainForm : Form {
 
     // The labels the page adds to the ribbon, in the user's language.
     void SendUi() => Send(new {
-        type = "ui", settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
+        type = "ui", units = Lang.T("page.units"), settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
         ahk = Lang.T("page.ahk"), ahkTip = Lang.T("page.ahkTip"), macros = Lang.T("page.macros"), macrosTip = Lang.T("page.macrosTip"),
         close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"), hint = Lang.T("page.hint"),
         print = Lang.T("page.print"), printTip = Lang.T("page.printTip"), pdf = Lang.T("page.pdf"), pdfTip = Lang.T("page.pdfTip"),

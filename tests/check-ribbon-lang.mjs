@@ -7,7 +7,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { RIBBON_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-chrome.js")).href);
+const { RIBBON_HTML: chrome } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-chrome.js")).href);
+// The ribbon's dialogs are part of it too (their preview's sample text is not translated).
+const { PARAGRAPH_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-paragraph-dialog.js")).href);
+const RIBBON_HTML = chrome + PARAGRAPH_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "");
 const decode = (s) => s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&times;/g, "×").replace(/&amp;/g, "&")
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ");
 const html = RIBBON_HTML.replace(/<!--[\s\S]*?-->/g, "").replace(/<style[\s\S]*?<\/style>/g, "").replace(/<svg[\s\S]*?<\/svg>/g, "");

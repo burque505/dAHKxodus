@@ -19,6 +19,7 @@ public static class Lang {
         try {
             foreach (var file in Directory.GetFiles(Folder, "*.json").OrderBy(f => Path.GetFileNameWithoutExtension(f) == "en" ? "" : f)) {
                 var code = Path.GetFileNameWithoutExtension(file);
+                if (code.Contains('.')) continue;    // (es.ribbon.json: the ribbon's own texts, not a language)
                 list.Add((code, Read(code).GetValueOrDefault("language.name") ?? code));
             }
         } catch (Exception ex) { MainForm.Log("lang: " + ex.Message); }
