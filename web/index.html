@@ -500,6 +500,64 @@ async function listChecks() {
   return out.join(", ");
 }
 
+// Format Painter: Ctrl+Shift+C / Ctrl+Shift+V paint the word at the caret as one undo step, the brush paints once on a
+// click, and the palette lists the brush.
+async function formatPainterChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("painter.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "Alpha beta\nGamma delta" });
+  await frame();
+  const blocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'));
+  const key = (el, k, extra = {}) => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...extra }));
+  // The text node holding `word` in paragraph `i`, and its offset there.
+  const find = (i, word) => {
+    const walker = document.createTreeWalker(blocks()[i], NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const at = n.textContent.indexOf(word);
+      if (at >= 0) return { n, at };
+    }
+    return null;
+  };
+  const place = (i, word, length) => {
+    const hit = find(i, word);
+    if (!hit) return;
+    blocks()[i].focus();
+    const range = document.createRange();
+    range.setStart(hit.n, hit.at + (length ? 0 : 1));
+    range.setEnd(hit.n, hit.at + (length ? word.length : 1));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  };
+  const bold = (i, word) => { const hit = find(i, word); return !!hit && Number(getComputedStyle(hit.n.parentElement).fontWeight) >= 600; };
+  place(0, "Alpha", true);
+  ribbon.exec("bold", { on: true });
+  await frame();
+  place(0, "Alpha");
+  key(blocks()[0], "C", { ctrlKey: true, shiftKey: true });
+  place(1, "delta");
+  key(blocks()[1], "V", { ctrlKey: true, shiftKey: true });
+  await frame();
+  out.push(`keys ${bold(1, "delta") && !bold(1, "Gamma") ? "ok" : "FAILED"}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${!bold(1, "delta") && bold(0, "Alpha") ? "ok" : "FAILED"}`);
+  place(0, "Alpha");
+  const brush = document.querySelector('#app [data-dxr="formatpainter"]');
+  brush?.click();
+  out.push(`brush ${brush?.getAttribute("aria-pressed") === "true" ? "ok" : "FAILED"}`);
+  place(1, "Gamma");
+  blocks()[1].dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+  await frame();
+  await frame();
+  out.push(`painted ${bold(1, "Gamma") && brush?.getAttribute("aria-pressed") === "false" ? "ok" : "FAILED"}`);
+  const listed = paletteItems().filter((i) => i.key === "b:formatpainter");
+  out.push(`palette ${listed.length === 1 ? "ok" : `FAILED (${listed.length})`}`);
+  return out.join(", ");
+}
+
 // The Paragraph dialog (the ribbon's): it opens in the language's unit, OK sets what changed as one undo step, and the
 // palette lists it once.
 async function paragraphDialogChecks() {
@@ -1007,7 +1065,8 @@ function takenShortcuts() {
     ["Ctrl+N", tr("New")], ["Ctrl+O", tr("Open…")], ["Ctrl+P", ui.print ?? "Print…"], ["Ctrl+,", ui.settings],
     ["Ctrl+Shift+P", ui.palette], ["Ctrl+Shift+R", ui.record], ["Alt+F", tr("File")], ["Ctrl+B", tr("Bold")],
     ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")],
-    ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")]])
+    ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")], ["Ctrl+Shift+C", "Copy formatting"],
+    ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")]])
     taken.push({ keys, name });
   return taken;
 }
@@ -1771,6 +1830,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "hotkeys: " + (await hotkeyChecks()) });
       post({ type: "log", text: "paragraph dialog: " + (await paragraphDialogChecks()) });
       post({ type: "log", text: "lists: " + (await listChecks()) });
+      post({ type: "log", text: "format painter: " + (await formatPainterChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
