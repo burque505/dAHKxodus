@@ -75,12 +75,11 @@
 // The host owns the files: New, Open, the Recent list and Save go to it, and it asks to save a changed document
 // before replacing or closing it (window.dax.isDirty()).
 // The loading overlay stays up from the start until the document is in, and a long document mounts window by window
-// (ribbon.openAsync, ribbon-open-async.js), so the overlay keeps moving and shows how far the mount has got.
+// (ribbon.openAsync), so the overlay keeps moving and shows how far the mount has got.
 // The editing session runs in the host, natively in .NET (nativeSessionBridge): the page's WASM engine starts too but
 // serves only the rarely used rest of its exports. ?engine=wasm runs the session in the page; ?verify=1 runs it in both.
 const tPage = performance.now();
 const { mountRibbon, initialize, getWasmExports, parseHeadlineCaseLists, DEFAULT_HEADLINE_CASE_TEXT } = await import("./node_modules/docxodus/dist/embed.bundle.js");
-const { addOpenAsync } = await import("./ribbon-open-async.js");
 const tImported = performance.now();
 
 const host = window.chrome?.webview;
@@ -560,6 +559,43 @@ async function formatPainterChecks() {
 
 // Change Case: the menu changes the selection keeping each character's formatting, as one undo step; Shift+F3 cycles the
 // word at the caret; Headline Case; the palette lists the six modes.
+// Show/Hide ¶ and joining lines: Ctrl+Shift+8 shows the marks and reports them with the view, the button hides them;
+// joinParagraphs makes three lines one paragraph (a space where two meet, none after a hyphen) as one undo step.
+async function marksJoinChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("join.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "a wall of\noverloaded shelves, profes-\nsional life.\nAfter" });
+  await frame();
+  const blocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'));
+  const texts = () => blocks().map((b) => (b.textContent ?? "").replace(/ /g, " ").trim());
+  const button = document.querySelector('#app [data-dxr="showmarks"]');
+  blocks()[0].focus();
+  blocks()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "*", code: "Digit8", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+  await frame();
+  const shown = getComputedStyle(blocks()[0], "::after").content === '"¶"';
+  out.push(`marks ${shown && button?.getAttribute("aria-pressed") === "true" && viewState().marks ? "ok" : "FAILED"}`);
+  button?.click();
+  await frame();
+  out.push(`hidden ${getComputedStyle(blocks()[0], "::after").content !== '"¶"' && !viewState().marks ? "ok" : "FAILED"}`);
+  blocks()[0].focus();
+  const range = document.createRange();
+  range.setStart(blocks()[0], 0);
+  range.setEnd(blocks()[2], blocks()[2].childNodes.length);
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
+  const joined = ribbon.exec("joinParagraphs");
+  await frame();
+  const want = "a wall of overloaded shelves, profes-sional life.";
+  out.push(`join ${joined && texts().length === 2 && texts()[0] === want ? "ok" : `FAILED (${JSON.stringify(texts())})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${texts().length === 4 ? "ok" : `FAILED (${texts().length})`}`);
+  return out.join(", ");
+}
+
 async function changeCaseChecks() {
   const out = [];
   openInContinuousView();
@@ -1128,7 +1164,8 @@ function takenShortcuts() {
     ["Ctrl+Shift+P", ui.palette], ["Ctrl+Shift+R", ui.record], ["Alt+F", tr("File")], ["Ctrl+B", tr("Bold")],
     ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")],
     ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")], ["Ctrl+Shift+C", "Copy formatting"],
-    ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")], ["Shift+F3", tr("Change Case (Shift+F3 cycles)")]])
+    ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")], ["Shift+F3", tr("Change Case (Shift+F3 cycles)")],
+    ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")]])
     taken.push({ keys, name });
   return taken;
 }
@@ -1697,6 +1734,7 @@ const savedView = {
     : parseFloat(viewParams.get("zoom")),
   comments: viewParams.has("comments") ? viewParams.get("comments") === "1" : null,
   rail: viewParams.has("rail") ? viewParams.get("rail") === "1" : null,
+  marks: viewParams.has("marks") ? viewParams.get("marks") === "1" : null,
 };
 function viewState() {
   return {
@@ -1704,6 +1742,7 @@ function viewState() {
     zoom: ribbon.editor?.fitsPageWidth ? "width" : ribbon.editor?.fitsOnePage ? "page" : ribbon.editor?.requestedZoom ?? null,
     comments: !!ribbon.control("showcomments")?.checked,
     rail: !!ribbon.control("showrail")?.checked,
+    marks: ribbon.control("showmarks")?.getAttribute("aria-pressed") === "true",
   };
 }
 function setChecked(name, on) {
@@ -1759,6 +1798,7 @@ function openInContinuousView() {
 // The parts that belong to the open document (zoom, comments) are applied again after each open.
 function applyView(v) {
   setChecked("showrail", v.rail);
+  if (v.marks != null) ribbon.setShowFormattingMarks(v.marks);    // (Show/Hide ¶)
   if (!ribbon.editor) return;
   if (v.paginated != null && !!ribbon.control("paginated")?.checked !== v.paginated)
     ribbon.control(v.paginated ? "viewpage" : "viewweb")?.click();
@@ -1908,6 +1948,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "lists: " + (await listChecks()) });
       post({ type: "log", text: "format painter: " + (await formatPainterChecks()) });
       post({ type: "log", text: "change case: " + (await changeCaseChecks()) });
+      post({ type: "log", text: "marks and join: " + (await marksJoinChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
@@ -1999,6 +2040,8 @@ ribbon = mountRibbon("#app", {
   typingUndo: "word",    // Undo takes typing back a word at a time, as in Word (the engine answers natively, in ms)
   // List levels > Also for new documents: the host keeps them ([Lists] Defaults) for every window and document.
   onListDefaults: (levels) => post({ type: "listDefaults", levels: JSON.stringify(levels) }),
+  // Show/Hide ¶ (the button, Ctrl+Shift+8, a script): kept with the view.
+  onFormattingMarksChange: () => setTimeout(reportView, 0),
   // Paste: Word's clipboard HTML names its pictures as files in the temporary folder, which the page cannot read; the
   // host reads them (EngineHost.ReadPastedImage). Pictures on the web the page fetches itself.
   resolvePasteImage: async (src) => {
@@ -2054,7 +2097,6 @@ window.dax = {
   // positional arguments by this)
   commands: () => ribbon.commands().map((c) => ({ ...c, order: Object.keys(c.args) })),
 };
-addOpenAsync(ribbon);
 ribbon.loader.stage(0);
 // The WASM runtime still starts (~200 ms): the session bridge is the host's, but the rest of the exports (the
 // converter the editor falls back to, comparison) stay the page's own. ?engine=wasm keeps the session here too.
