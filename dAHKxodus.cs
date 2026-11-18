@@ -189,7 +189,8 @@ class MainForm : Form {
             try { await Init(); } catch (Exception ex) { Log("init failed: " + ex); if (measureOut != "") Close(); }
         };
         // (back in the window: Headline Case's word lists again, if the file was edited meanwhile)
-        Activated += (s, e) => { if (pageReady) SendHeadlineLists(); };
+        // (and Find's options, which another window may have changed)
+        Activated += (s, e) => { if (pageReady) { SendHeadlineLists(); SendFindOptions(); } };
     }
 
     async Task Init() {
@@ -729,6 +730,7 @@ class MainForm : Form {
                     SendHooks();
                     SendListDefaults();
                     SendHeadlineLists();
+                    SendFindOptions();
                     pageReady = true;
                     StartAutosave();
                     // A copy left behind by a dAHKxodus that didn't close normally, offered before anything opens.
@@ -864,6 +866,11 @@ class MainForm : Form {
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                         Log("headline case: " + ex.Message);
                     }
+                    break;
+                case "findOptions":    // the find bar's Options: [Find] Options, for every window
+                    if (measureOut != "") { Log("find options (measure run, not kept): " + Str("options")); break; }
+                    sentFindOptions = Str("options");
+                    Settings.Set("Find", "Options", sentFindOptions);
                     break;
                 case "listDefaults":    // List levels > Also for new documents: [Lists] Defaults, for every window
                     if (measureOut != "") { Log("list defaults (measure run, not kept): " + Str("levels")); break; }
@@ -1514,6 +1521,19 @@ class MainForm : Form {
     void SendListDefaults() {
         var levels = measureOut == "" ? Settings.Get("Lists", "Defaults") : "";
         if (levels != "") Send(new { type = "listDefaults", levels });
+    }
+
+    // Find's options (the find bar's Options menu: Match case, Find whole words only, Use wildcards...): [Find] Options,
+    // the names of those that are on, comma-separated (matchCase,wholeWord,matchPrefix,matchSuffix,ignorePunctuation,
+    // ignoreSpace,wildcards,regex). Sent when the page is ready and again when the window is active and they changed.
+    // A measure run starts with none.
+    string? sentFindOptions;
+
+    void SendFindOptions() {
+        var options = measureOut == "" ? Settings.Get("Find", "Options") : "";
+        if (options == sentFindOptions) return;
+        sentFindOptions = options;
+        Send(new { type = "findOptions", options });
     }
 
     // Headline Case's word lists (Change Case > Headline Case): headline-case.txt beside the settings, as AhkWord's, to

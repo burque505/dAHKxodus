@@ -22,7 +22,7 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
 - [ ] **5. Paste and paragraphs:** several windows, as in Word (done), with an Arrange windows macro; pasting from Word or a browser keeps paragraphs, lists and tables; the Paragraph
   dialog (exact indents, tab stops, keep with next...); multilevel lists as in AhkWord (define, change and keep each
   level's number format, text such as 1.1.1., indent and start; all nine levels); Format Painter; Change Case; more
-  find options
+  find options (done: whole words, wildcards, regular expressions, ^p across paragraphs)
 - [ ] **6. Pages:** the ruler; section breaks; columns; line numbers; table and picture properties
 - [ ] **7. References and styles:** cross-references, updating the table of contents and fields, bookmarks; new and
   changed styles, Copy Styles from Document

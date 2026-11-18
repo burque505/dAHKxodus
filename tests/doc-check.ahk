@@ -38,7 +38,8 @@ try {
     names := Map()
     for c in Doc.Commands()
         names[c.Name] := c
-    Check("commands", names.Has("bold") && names.Has("insertText") && names.Has("save") && names["find"].Args.Length = 3,
+    Check("commands", names.Has("bold") && names.Has("insertText") && names.Has("save")
+        && names["find"].Args.Length = 10 && names["find"].Args[2] = "matchCase?" && names["find"].Args[10] = "index?",
         names.Count " commands")
     Check("help", InStr(Doc.Help(), "InsertText(text)"))
     for name in ["Opened", "Saved", "Modified", "TextChanged", "Command"]

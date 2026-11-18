@@ -596,6 +596,53 @@ async function marksJoinChecks() {
   return out.join(", ");
 }
 
+// Find options: whole words narrows a find; ^p^p -> ^p drops empty paragraphs and a regex with $1 swaps words, each one
+// undo step; an invalid pattern is a bad_arguments error; the find bar's Options menu changes the options (the host
+// keeps them: [Find] Options) and Special inserts ^p into the find field.
+async function findOptionsChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("find.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "cat concat cats cat\n\nSmith John\n\n\nend" });
+  await frame();
+  const blocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'));
+  const texts = () => blocks().map((b) => (b.textContent ?? "").replace(/ /g, " ").trim());
+  const all = ribbon.exec("find", { text: "cat" }), whole = ribbon.exec("find", { text: "cat", wholeWord: true });
+  out.push(`whole words ${all === 4 && whole === 2 ? "ok" : `FAILED (${all}, ${whole})`}`);
+  const before = texts().length;
+  const dropped = ribbon.exec("replaceAll", { text: "^p^p", with: "^p" });
+  await frame();
+  out.push(`^p^p ${dropped === 2 && texts().length === before - 2 ? "ok" : `FAILED (${dropped}: ${JSON.stringify(texts())})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${texts().length === before ? "ok" : `FAILED (${texts().length} of ${before})`}`);
+  const swapped = ribbon.exec("replaceAll", { text: "(\\w+) (\\w+)$", with: "$2 $1", regex: true });
+  await frame();
+  out.push(`regex ${swapped >= 1 && texts().includes("John Smith") ? "ok" : `FAILED (${JSON.stringify(texts())})`}`);
+  let bad = "";
+  try { ribbon.exec("find", { text: "(", regex: true }); } catch (error) { bad = String(error.code ?? error); }
+  out.push(`invalid ${bad === "bad_arguments" ? "ok" : `FAILED (${bad})`}`);
+  ribbon.control("findtoggle")?.click();
+  await frame();
+  const box = document.querySelector('[data-findopt="matchSuffix"]');
+  box.checked = true;
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+  const on = ribbon.getFindOptions().matchSuffix === true;
+  box.checked = false;
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+  out.push(`options menu ${on && !ribbon.getFindOptions().matchSuffix ? "ok" : `FAILED (${JSON.stringify(ribbon.getFindOptions())})`}`);
+  const field = ribbon.control("findtext");
+  field.value = "";
+  field.focus();
+  ribbon.control("findspecial")?.click();
+  document.querySelector('[data-dxr="findspecialmenu"] button[data-code="^p"]')?.click();
+  out.push(`special ${field.value === "^p" ? "ok" : `FAILED (${field.value})`}`);
+  ribbon.control("findclose")?.click();
+  return out.join(", ");
+}
+
 async function changeCaseChecks() {
   const out = [];
   openInContinuousView();
@@ -1882,6 +1929,9 @@ host?.addEventListener("message", async (e) => {
       // Headline Case's word lists, from headline-case.txt (the host makes it from the editor's own the first time).
       if (m.create) post({ type: "headlineDefaults", text: DEFAULT_HEADLINE_CASE_TEXT });
       else ribbon.setHeadlineCaseLists(parseHeadlineCaseLists(m.text ?? ""));
+    } else if (m.type === "findOptions") {
+      // Find's options as the host keeps them ([Find] Options: the names of those that are on).
+      ribbon.setFindOptions(Object.fromEntries((m.options ?? "").split(",").map((k) => k.trim()).filter(Boolean).map((k) => [k, true])));
     } else if (m.type === "listDefaults") {
       // The levels new lists start from (List levels > Also for new documents), kept by the host.
       try { ribbon.setListDefaults(JSON.parse(m.levels)); } catch (error) { post({ type: "log", text: "list defaults: " + error }); }
@@ -1949,6 +1999,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "format painter: " + (await formatPainterChecks()) });
       post({ type: "log", text: "change case: " + (await changeCaseChecks()) });
       post({ type: "log", text: "marks and join: " + (await marksJoinChecks()) });
+      post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
@@ -2042,6 +2093,8 @@ ribbon = mountRibbon("#app", {
   onListDefaults: (levels) => post({ type: "listDefaults", levels: JSON.stringify(levels) }),
   // Show/Hide ¶ (the button, Ctrl+Shift+8, a script): kept with the view.
   onFormattingMarksChange: () => setTimeout(reportView, 0),
+  // Find's options (the find bar's Options menu): the host keeps them ([Find] Options) for every window.
+  onFindOptionsChange: (options) => post({ type: "findOptions", options: Object.keys(options).join(",") }),
   // Paste: Word's clipboard HTML names its pictures as files in the temporary folder, which the page cannot read; the
   // host reads them (EngineHost.ReadPastedImage). Pictures on the web the page fetches itself.
   resolvePasteImage: async (src) => {
