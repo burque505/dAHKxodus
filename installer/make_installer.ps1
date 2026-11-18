@@ -139,7 +139,7 @@ try {
 		}
 		foreach ($dir in "lang", "licenses", "macros") { Copy-Item (Join-Path $src $dir) (Join-Path $folder $dir) -Recurse }
 		New-Item -ItemType Directory -Force (Join-Path $folder "web") | Out-Null
-		foreach ($own in "index.html", "ribbon-open-async.js") { Copy-Item (Join-Path $src "web\$own") (Join-Path $folder "web\$own") }
+		foreach ($own in @("index.html")) { Copy-Item (Join-Path $src "web\$own") (Join-Path $folder "web\$own") }
 		# the editor package, without its source maps and type declarations (11 MB the page never loads)
 		$toPackage = Join-Path $folder "web\node_modules\docxodus"
 		foreach ($item in Get-ChildItem $package -Recurse -File) {
