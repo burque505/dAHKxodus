@@ -1835,12 +1835,12 @@ document.addEventListener("mousedown", (e) => {
   sel.addRange(r);
 }, true);
 
-// Before an open: the ribbon's open fails in page view ("Pagination requires staging and container elements attached
-// to their document": it lays the pages out on a surface not yet in the page), so every document opens in continuous
-// view, and applyView afterwards switches to page view if that is where the user was (savedView keeps it).
+// Before an open: the document opens straight in the view the user was in (savedView keeps it): in page view the
+// ribbon lays the pages out as it opens, which renders the document once, where opening continuous and switching
+// rendered it twice. applyView afterwards finds the view already right.
 function openInContinuousView() {
   const box = ribbon.control("paginated");
-  if (box) box.checked = false;    // (what the open reads; no event: the view the user chose stays in savedView)
+  if (box) box.checked = !!savedView.paginated;    // (what the open reads; no event)
 }
 // The parts that belong to the open document (zoom, comments) are applied again after each open.
 function applyView(v) {
