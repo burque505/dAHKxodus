@@ -188,6 +188,8 @@ class MainForm : Form {
         Load += async (s, e) => {
             try { await Init(); } catch (Exception ex) { Log("init failed: " + ex); if (measureOut != "") Close(); }
         };
+        // (back in the window: Headline Case's word lists again, if the file was edited meanwhile)
+        Activated += (s, e) => { if (pageReady) SendHeadlineLists(); };
     }
 
     async Task Init() {
@@ -725,6 +727,7 @@ class MainForm : Form {
                     SendMacros();    // (their hotkeys work from the start)
                     SendHooks();
                     SendListDefaults();
+                    SendHeadlineLists();
                     pageReady = true;
                     StartAutosave();
                     // A copy left behind by a dAHKxodus that didn't close normally, offered before anything opens.
@@ -848,6 +851,17 @@ class MainForm : Form {
                     break;
                 case "hooksRequest":    // the Macros tab's Event hooks...
                     BeginInvoke(ShowHooks);
+                    break;
+                case "headlineDefaults":    // the editor's own Headline Case lists, for a headline-case.txt not made yet
+                    try {
+                        if (!File.Exists(HeadlineListsPath)) {
+                            Directory.CreateDirectory(Path.GetDirectoryName(HeadlineListsPath)!);
+                            File.WriteAllText(HeadlineListsPath, Str("text").Replace("\r\n", "\n").Replace("\n", "\r\n"), new System.Text.UTF8Encoding(false));
+                            Log("headline case: made " + HeadlineListsPath);
+                        }
+                    } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                        Log("headline case: " + ex.Message);
+                    }
                     break;
                 case "listDefaults":    // List levels > Also for new documents: [Lists] Defaults, for every window
                     if (measureOut != "") { Log("list defaults (measure run, not kept): " + Str("levels")); break; }
@@ -1498,6 +1512,25 @@ class MainForm : Form {
     void SendListDefaults() {
         var levels = measureOut == "" ? Settings.Get("Lists", "Defaults") : "";
         if (levels != "") Send(new { type = "listDefaults", levels });
+    }
+
+    // Headline Case's word lists (Change Case > Headline Case): headline-case.txt beside the settings, as AhkWord's, to
+    // be edited. Made with the editor's own lists the first time (the page sends them); sent to the page when it is
+    // ready and when the window is active again after the file changed. A measure run uses the editor's own.
+    static string HeadlineListsPath => Path.Combine(AppFolders.Roaming, "headline-case.txt");
+    DateTime headlineListsTime;
+
+    void SendHeadlineLists() {
+        if (measureOut != "" || web.CoreWebView2 == null) return;
+        try {
+            if (!File.Exists(HeadlineListsPath)) { Send(new { type = "headlineLists", create = true }); return; }
+            var time = File.GetLastWriteTimeUtc(HeadlineListsPath);
+            if (time == headlineListsTime) return;
+            headlineListsTime = time;
+            Send(new { type = "headlineLists", text = File.ReadAllText(HeadlineListsPath) });
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Log("headline case: " + ex.Message);
+        }
     }
 
     void SendHooks() {

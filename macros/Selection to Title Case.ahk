@@ -1,14 +1,8 @@
 #Requires AutoHotkey v2.0
 #Include "..\Doc.ahk"
-; Title-cases the selected text (within one paragraph; the selection's formatting becomes that of its start).
-Selected := Doc.SelectedText
-if Selected = "" {
-    Doc.SetStatus("Select some text first.")
-    ExitApp
-}
-if InStr(Selected, "`n") {
-    Doc.SetStatus("Select text within one paragraph.")
-    ExitApp
-}
-Doc.InsertText(StrTitle(Selected))
-Doc.SetStatus("Selection converted to Title Case.")
+; Capitalizes each word of the selection (with nothing selected, the word at the caret), keeping its formatting.
+; Doc.ChangeCase also takes "headline", "sentence", "lower", "upper", "toggle" and "cycle" (Shift+F3).
+if Doc.ChangeCase("title")
+    Doc.SetStatus("Selection converted to Title Case.")
+else
+    Doc.SetStatus("Nothing to change.")

@@ -79,7 +79,7 @@
 // The editing session runs in the host, natively in .NET (nativeSessionBridge): the page's WASM engine starts too but
 // serves only the rarely used rest of its exports. ?engine=wasm runs the session in the page; ?verify=1 runs it in both.
 const tPage = performance.now();
-const { mountRibbon, initialize, getWasmExports } = await import("./node_modules/docxodus/dist/embed.bundle.js");
+const { mountRibbon, initialize, getWasmExports, parseHeadlineCaseLists, DEFAULT_HEADLINE_CASE_TEXT } = await import("./node_modules/docxodus/dist/embed.bundle.js");
 const { addOpenAsync } = await import("./ribbon-open-async.js");
 const tImported = performance.now();
 
@@ -555,6 +555,68 @@ async function formatPainterChecks() {
   out.push(`painted ${bold(1, "Gamma") && brush?.getAttribute("aria-pressed") === "false" ? "ok" : "FAILED"}`);
   const listed = paletteItems().filter((i) => i.key === "b:formatpainter");
   out.push(`palette ${listed.length === 1 ? "ok" : `FAILED (${listed.length})`}`);
+  return out.join(", ");
+}
+
+// Change Case: the menu changes the selection keeping each character's formatting, as one undo step; Shift+F3 cycles the
+// word at the caret; Headline Case; the palette lists the six modes.
+async function changeCaseChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("case.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "alpha beta gamma\nthe deed of trust for acme LLC v. the bank" });
+  await frame();
+  const blocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'));
+  const text = (i) => (blocks()[i]?.textContent ?? "").replace(/ /g, " ").trim();
+  const find = (i, word) => {
+    const walker = document.createTreeWalker(blocks()[i], NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const at = n.textContent.indexOf(word);
+      if (at >= 0) return { n, at };
+    }
+    return null;
+  };
+  const select = (i, word, caret) => {
+    const hit = find(i, word);
+    if (!hit) return;
+    blocks()[i].focus();
+    const range = document.createRange();
+    range.setStart(hit.n, hit.at + (caret ? 1 : 0));
+    range.setEnd(hit.n, hit.at + (caret ? 1 : word.length));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  };
+  const selectAll = (i) => {
+    blocks()[i].focus();
+    const range = document.createRange();
+    range.selectNodeContents(blocks()[i]);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  };
+  const bold = (i, word) => { const hit = find(i, word); return !!hit && Number(getComputedStyle(hit.n.parentElement).fontWeight) >= 600; };
+  select(0, "beta");
+  ribbon.exec("bold", { on: true });
+  await frame();
+  selectAll(0);
+  document.querySelector('#app [data-dxr="changecase"]')?.click();
+  document.querySelector('#app [data-dxr="casemenu"] button[data-case="upper"]')?.click();
+  await frame();
+  out.push(`menu ${text(0) === "ALPHA BETA GAMMA" && bold(0, "BETA") && !bold(0, "ALPHA") ? "ok" : `FAILED (${text(0)})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${text(0) === "alpha beta gamma" ? "ok" : `FAILED (${text(0)})`}`);
+  select(0, "gamma", true);
+  blocks()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "F3", shiftKey: true, bubbles: true, cancelable: true }));
+  await frame();
+  out.push(`Shift+F3 ${text(0) === "alpha beta Gamma" ? "ok" : `FAILED (${text(0)})`}`);
+  selectAll(1);
+  ribbon.exec("changeCase", { mode: "headline" });
+  await frame();
+  out.push(`headline ${text(1) === "The Deed of Trust for Acme LLC v. the Bank" ? "ok" : `FAILED (${text(1)})`}`);
+  const listed = paletteItems().filter((i) => i.key.startsWith("case:"));
+  out.push(`palette ${listed.length === 6 ? "ok" : `FAILED (${listed.length})`}`);
   return out.join(", ");
 }
 
@@ -1066,7 +1128,7 @@ function takenShortcuts() {
     ["Ctrl+Shift+P", ui.palette], ["Ctrl+Shift+R", ui.record], ["Alt+F", tr("File")], ["Ctrl+B", tr("Bold")],
     ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")],
     ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")], ["Ctrl+Shift+C", "Copy formatting"],
-    ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")]])
+    ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")], ["Shift+F3", tr("Change Case (Shift+F3 cycles)")]])
     taken.push({ keys, name });
   return taken;
 }
@@ -1483,6 +1545,16 @@ function paletteItems() {
         run: () => runControl(pasteButton, () => b.click()) });
     }
   }
+  // Home > Font's Change Case (the Aa button's menu): Sentence case. to Headline Case.
+  const caseButton = root.querySelector('[data-dxr="changecase"]');
+  if (caseButton) {
+    for (const b of root.querySelectorAll('[data-dxr="casemenu"] button[data-case]')) {
+      add({ key: "case:" + b.dataset.case, name: squash(b.querySelector("span")?.textContent), where: placeOf(caseButton),
+        description: squash(b.title), keys: "", on: false,
+        off: caseButton.disabled || caseButton.getAttribute("aria-disabled") === "true",
+        run: () => runControl(caseButton, () => b.click()) });
+    }
+  }
   for (const m of macros())
     add({ key: "m:" + (m.fn ?? m.path), name: m.label, where: ui.paletteMacro, description: m.title, keys: m.hotkey ?? "", on: false, off: false, run: () => runMacro(m) });
   return items;
@@ -1766,6 +1838,10 @@ host?.addEventListener("message", async (e) => {
     } else if (m.type === "captured") {
       captureWaiters.get(m.name)?.();
       captureWaiters.delete(m.name);
+    } else if (m.type === "headlineLists") {
+      // Headline Case's word lists, from headline-case.txt (the host makes it from the editor's own the first time).
+      if (m.create) post({ type: "headlineDefaults", text: DEFAULT_HEADLINE_CASE_TEXT });
+      else ribbon.setHeadlineCaseLists(parseHeadlineCaseLists(m.text ?? ""));
     } else if (m.type === "listDefaults") {
       // The levels new lists start from (List levels > Also for new documents), kept by the host.
       try { ribbon.setListDefaults(JSON.parse(m.levels)); } catch (error) { post({ type: "log", text: "list defaults: " + error }); }
@@ -1831,6 +1907,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "paragraph dialog: " + (await paragraphDialogChecks()) });
       post({ type: "log", text: "lists: " + (await listChecks()) });
       post({ type: "log", text: "format painter: " + (await formatPainterChecks()) });
+      post({ type: "log", text: "change case: " + (await changeCaseChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
