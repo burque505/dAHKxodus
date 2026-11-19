@@ -10,6 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { RIBBON_HTML: chrome } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-chrome.js")).href);
 // The ribbon's dialogs are part of it too (their preview's sample text is not translated).
 const { PARAGRAPH_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-paragraph-dialog.js")).href);
+const { COLUMNS_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-columns-dialog.js")).href);
 const { LIST_DIALOG_HTML, LIST_DIALOG_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-list-dialog.js")).href);
 // (the List Levels dialog writes its rows' choices from code: they are listed as texts of their own)
 // (and the find bar's Special menu, made from code for each mode, and its "Invalid" for a pattern that isn't one)
@@ -24,7 +25,7 @@ for (const t of Object.values(RIBBON_STATUS_TEXTS ?? {})) FIND_TEXTS.add(t);
 for (const m of readFileSync(join(root, "web/node_modules/docxodus/dist/editor.js"), "utf8")
   .matchAll(/--docx-section-break-\w+, "([^"]+)"/g)) FIND_TEXTS.add(m[1]);
 const RIBBON_HTML = chrome + PARAGRAPH_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "")
-  + LIST_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
+  + LIST_DIALOG_HTML + COLUMNS_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
 const decode = (s) => s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&times;/g, "×").replace(/&amp;/g, "&")
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ");
 const html = RIBBON_HTML.replace(/<!--[\s\S]*?-->/g, "").replace(/<style[\s\S]*?<\/style>/g, "").replace(/<svg[\s\S]*?<\/svg>/g, "");
