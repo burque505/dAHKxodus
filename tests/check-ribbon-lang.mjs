@@ -17,6 +17,12 @@ const { specialFindCodes, specialReplaceCodes } = await import(pathToFileURL(joi
 const FIND_TEXTS = new Set(["Invalid"]);
 for (const mode of [{}, { wildcards: true }, { regex: true }])
   for (const c of [...specialFindCodes(mode), ...specialReplaceCodes(mode)]) FIND_TEXTS.add(c.label);
+// (and the status line's texts the ribbon writes from code)
+const { RIBBON_STATUS_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-chrome.js")).href);
+for (const t of Object.values(RIBBON_STATUS_TEXTS ?? {})) FIND_TEXTS.add(t);
+// (and the continuous view's section-break line, the editor's CSS: the page sets its custom properties)
+for (const m of readFileSync(join(root, "web/node_modules/docxodus/dist/editor.js"), "utf8")
+  .matchAll(/--docx-section-break-\w+, "([^"]+)"/g)) FIND_TEXTS.add(m[1]);
 const RIBBON_HTML = chrome + PARAGRAPH_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "")
   + LIST_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
 const decode = (s) => s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&times;/g, "×").replace(/&amp;/g, "&")
@@ -24,7 +30,7 @@ const decode = (s) => s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
 const html = RIBBON_HTML.replace(/<!--[\s\S]*?-->/g, "").replace(/<style[\s\S]*?<\/style>/g, "").replace(/<svg[\s\S]*?<\/svg>/g, "");
 const texts = new Set();
 for (const m of html.matchAll(/>([^<]+)</g)) { const t = decode(m[1]).trim(); if (t) texts.add(t); }
-for (const m of html.matchAll(/\s(?:title|aria-label|placeholder)="([^"]+)"/g)) texts.add(decode(m[1]).trim());
+for (const m of html.matchAll(/\s(?:title|aria-label|placeholder|label)="([^"]+)"/g)) texts.add(decode(m[1]).trim());
 // (texts that read the same in any language: names, keys, number samples)
 const words = [...texts].filter((t) => /[A-Za-z]{2}/.test(t) && !/^(Docxodus|Aa|pt|Ctrl\+\w|https:\/\/|[ivxIVX., ()]+|DOCX → WASM → DOCX)$/.test(t));
 

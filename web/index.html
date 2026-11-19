@@ -596,6 +596,47 @@ async function marksJoinChecks() {
   return out.join(", ");
 }
 
+// Breaks (M6 step 1): a Continuous section break at the start of a paragraph makes two sections and the continuous
+// view's line names it (in Spanish when the ribbon is); Undo takes it away; a page break splits the paragraph.
+async function breaksChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("breaks.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "First part\nSecond part" });
+  await frame();
+  const blocks = () => Array.from(document.querySelectorAll('#app [data-anchor][contenteditable="true"]'));
+  const sections = () => Array.from(document.querySelectorAll('#app [data-section-index]'));
+  const second = blocks()[1];
+  second.focus();
+  const range = document.createRange();
+  range.setStart(second, 0);
+  range.collapse(true);
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
+  ribbon.exec("sectionBreak", { start: "continuous" });
+  await frame();
+  const line = sections()[1] ? getComputedStyle(sections()[1], "::before").content : "";
+  const want = JSON.stringify(ui.ribbon?.["Section break (Continuous)"] ?? "Section break (Continuous)");
+  out.push(`section ${sections().length === 2 && sections()[1].dataset.sectionType === "continuous" ? "ok" : `FAILED (${sections().length})`}`);
+  out.push(`line ${line === want ? "ok" : `FAILED (${line})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${sections().length === 1 ? "ok" : `FAILED (${sections().length})`}`);
+  blocks()[0].focus();
+  const at = document.createRange();
+  at.setStart(blocks()[0], 0);
+  at.collapse(true);
+  getSelection().removeAllRanges();
+  getSelection().addRange(at);
+  const before = blocks().length;
+  ribbon.exec("insertBreak", { kind: "page" });
+  await frame();
+  out.push(`page break ${blocks().length === before + 1 ? "ok" : `FAILED (${before} -> ${blocks().length})`}`);
+  return out.join(", ");
+}
+
 // Find options: whole words narrows a find; ^p^p -> ^p drops empty paragraphs and a regex with $1 swaps words, each one
 // undo step; an invalid pattern is a bad_arguments error; the find bar's Options menu changes the options (the host
 // keeps them: [Find] Options) and Special inserts ^p into the find field.
@@ -1083,6 +1124,13 @@ function relabel() {
   if (legal && !legal.title.endsWith("(Ctrl+Shift+G)")) legal.title += " (Ctrl+Shift+G)";
   const hint = document.querySelector("#app [data-dxr-hint]");
   if (hint && ui.hint) hint.innerHTML = ui.hint;    // (the host's own text, from lang\<code>.json)
+  // The continuous view's section-break line (the editor's CSS, through custom properties).
+  const breakLines = { nextPage: "Next page", continuous: "Continuous", evenPage: "Even page", oddPage: "Odd page", nextColumn: "Next column" };
+  for (const [type, name] of Object.entries(breakLines)) {
+    const text = ui.ribbon?.[`Section break (${name})`];
+    if (text) document.documentElement.style.setProperty(`--docx-section-break-${type}`, JSON.stringify(text));
+    else document.documentElement.style.removeProperty(`--docx-section-break-${type}`);
+  }
 }
 
 // --- Printing and PDF: the host asks (preparePrint) and prints this page; the print CSS above shows the pages only.
@@ -1999,6 +2047,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "format painter: " + (await formatPainterChecks()) });
       post({ type: "log", text: "change case: " + (await changeCaseChecks()) });
       post({ type: "log", text: "marks and join: " + (await marksJoinChecks()) });
+      post({ type: "log", text: "breaks: " + (await breaksChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
