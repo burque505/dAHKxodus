@@ -673,6 +673,47 @@ async function columnsChecks() {
   return out.join(", ");
 }
 
+// Table properties: in a table, the cell's vertical alignment, row height, column width, then the dialog's OK (centered,
+// alt text) as one undo step; the dialog opens on the caret's table and not outside one.
+async function tablePropertiesChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("table-properties.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("table", { rows: 2, columns: 2 });
+  await frame();
+  const cell = document.querySelector('#app td [data-anchor][contenteditable="true"]');
+  cell?.focus();
+  cell?.click();
+  await frame();
+  const info = () => ribbon.exec("tableInfo");
+  out.push(`in table ${info() ? "ok" : "FAILED"}`);
+  await ribbon.exec("cellAlignment", { align: "center" });
+  await frame();
+  out.push(`align ${info()?.verticalAlignment === "center" ? "ok" : `FAILED (${info()?.verticalAlignment})`}`);
+  await ribbon.exec("rowHeight", { twips: 720 });
+  await frame();
+  out.push(`height ${info()?.rowHeightTwips === 720 ? "ok" : `FAILED (${info()?.rowHeightTwips})`}`);
+  await ribbon.exec("columnWidth", { twips: 2880 });
+  await frame();
+  const i1 = info();
+  out.push(`width ${i1?.columnWidthsTwips?.[i1.columnIndex] === 2880 ? "ok" : `FAILED (${JSON.stringify(i1?.columnWidthsTwips)})`}`);
+  await ribbon.exec("applyTableProperties", { table: { alignment: "center", altTitle: "Box" }, cell: { verticalAlignment: "bottom" } });
+  await frame();
+  const i2 = info();
+  out.push(`dialog ok ${i2?.alignment === "center" && i2?.altTitle === "Box" && i2?.verticalAlignment === "bottom" ? "ok" : `FAILED (${JSON.stringify(i2)})`}`);
+  ribbon.exec("undo");
+  await frame();
+  const i3 = info();
+  out.push(`one undo ${i3 && !i3.alignment && !i3.altTitle && i3.verticalAlignment === "center" ? "ok" : `FAILED (${JSON.stringify(i3)})`}`);
+  const opened = ribbon.openTableDialog();
+  const dialog = document.querySelector('#app dialog[data-dxr="tabledialog"]');
+  out.push(`dialog opens ${opened && dialog?.open ? "ok" : "FAILED"}`);
+  dialog?.querySelector('button[value="cancel"]')?.click();
+  return out.join(", ");
+}
+
 // Tab: in a plain paragraph it types a tab (a w:tab) and the focus stays in the document.
 async function tabChecks() {
   const out = [];
@@ -2149,6 +2190,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "columns: " + (await columnsChecks()) });
       post({ type: "log", text: "pictures: " + (await pictureChecks()) });
       post({ type: "log", text: "tab key: " + (await tabChecks()) });
+      post({ type: "log", text: "table properties: " + (await tablePropertiesChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
