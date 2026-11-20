@@ -673,6 +673,68 @@ async function columnsChecks() {
   return out.join(", ");
 }
 
+// Tab: in a plain paragraph it types a tab (a w:tab) and the focus stays in the document.
+async function tabChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("tab.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "ab" });
+  await frame();
+  const block = () => document.querySelector('#app [data-anchor][contenteditable="true"]');
+  const b = block();
+  b.focus();
+  const text = Array.from(b.querySelectorAll("*")).flatMap((e) => Array.from(e.childNodes)).find((n) => n.nodeType === 3 && n.nodeValue.includes("ab"));
+  if (text) window.getSelection().collapse(text, text.nodeValue.indexOf("ab") + 1);
+  b.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+  await frame();
+  out.push(`tab ${block()?.querySelector("[data-docx-tab]") ? "ok" : "FAILED (no tab)"}`);
+  out.push(`focus ${document.activeElement?.closest?.("#app [data-anchor]") ? "ok" : `FAILED (${document.activeElement?.tagName})`}`);
+  return out.join(", ");
+}
+
+// Pictures: insert one, select it, size keeps the shape, Square floats it, back inline, alt text, delete + undo.
+async function pictureChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("pictures.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "Words before and after the picture." });
+  await frame();
+  const canvas = document.createElement("canvas");
+  canvas.width = 96; canvas.height = 48;
+  canvas.getContext("2d").fillRect(0, 0, 96, 48);
+  document.querySelector('#app [data-anchor][contenteditable="true"]').focus();
+  await ribbon.exec("insertPicture", { base64: canvas.toDataURL("image/png").split(",")[1] });
+  await frame();
+  const imgs = () => document.querySelectorAll("#app [data-anchor] img").length;
+  ribbon.exec("selectPicture");
+  const tab = document.querySelector('#app .dxr-tab[data-tab="picture"]');
+  out.push(`select ${ribbon.exec("picture") && tab && !tab.hidden ? "ok" : "FAILED"}`);
+  await ribbon.exec("pictureSize", { height: 72 });
+  await frame();
+  const p1 = ribbon.exec("picture");
+  out.push(`size ${p1 && Math.round(p1.widthPoints) === 144 ? "ok" : `FAILED (${JSON.stringify(p1)})`}`);
+  await ribbon.exec("pictureWrap", { wrap: "square" });
+  await frame();
+  out.push(`square ${ribbon.exec("picture")?.wrap === "square" ? "ok" : "FAILED"}`);
+  await ribbon.exec("pictureWrap", { wrap: "inline" });
+  await frame();
+  out.push(`inline ${ribbon.exec("picture")?.wrap === "inline" ? "ok" : "FAILED"}`);
+  await ribbon.exec("pictureAltText", { altText: "box" });
+  await frame();
+  out.push(`alt text ${ribbon.exec("picture")?.altText === "box" ? "ok" : "FAILED"}`);
+  await ribbon.exec("deletePicture");
+  await frame();
+  const gone = imgs() === 0;
+  ribbon.exec("undo");
+  await frame();
+  out.push(`delete+undo ${gone && imgs() === 1 ? "ok" : `FAILED (${gone}, ${imgs()})`}`);
+  return out.join(", ");
+}
+
 // Find options: whole words narrows a find; ^p^p -> ^p drops empty paragraphs and a regex with $1 swaps words, each one
 // undo step; an invalid pattern is a bad_arguments error; the find bar's Options menu changes the options (the host
 // keeps them: [Find] Options) and Special inserts ^p into the find field.
@@ -2085,6 +2147,8 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "marks and join: " + (await marksJoinChecks()) });
       post({ type: "log", text: "breaks: " + (await breaksChecks()) });
       post({ type: "log", text: "columns: " + (await columnsChecks()) });
+      post({ type: "log", text: "pictures: " + (await pictureChecks()) });
+      post({ type: "log", text: "tab key: " + (await tabChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
