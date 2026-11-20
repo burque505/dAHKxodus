@@ -13,6 +13,7 @@ const { PARAGRAPH_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/nod
 const { COLUMNS_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-columns-dialog.js")).href);
 const { PICTURE_DIALOG_HTML, PICTURE_MENU_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-picture-dialog.js")).href);
 const { TABLE_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-table-dialog.js")).href);
+const { LINE_NUMBERS_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-linenumbers-dialog.js")).href);
 const { LIST_DIALOG_HTML, LIST_DIALOG_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-list-dialog.js")).href);
 // (the List Levels dialog writes its rows' choices from code: they are listed as texts of their own)
 // (and the find bar's Special menu, made from code for each mode, and its "Invalid" for a pattern that isn't one)
@@ -27,7 +28,7 @@ for (const t of Object.values(RIBBON_STATUS_TEXTS ?? {})) FIND_TEXTS.add(t);
 for (const m of readFileSync(join(root, "web/node_modules/docxodus/dist/editor.js"), "utf8")
   .matchAll(/--docx-section-break-\w+, "([^"]+)"/g)) FIND_TEXTS.add(m[1]);
 const RIBBON_HTML = chrome + PARAGRAPH_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "")
-  + LIST_DIALOG_HTML + COLUMNS_DIALOG_HTML + PICTURE_DIALOG_HTML + PICTURE_MENU_HTML + TABLE_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
+  + LIST_DIALOG_HTML + COLUMNS_DIALOG_HTML + PICTURE_DIALOG_HTML + PICTURE_MENU_HTML + TABLE_DIALOG_HTML + LINE_NUMBERS_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
 const decode = (s) => s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&times;/g, "×").replace(/&amp;/g, "&")
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ");
 const html = RIBBON_HTML.replace(/<!--[\s\S]*?-->/g, "").replace(/<style[\s\S]*?<\/style>/g, "").replace(/<svg[\s\S]*?<\/svg>/g, "");

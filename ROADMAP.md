@@ -23,7 +23,7 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   dialog (exact indents, tab stops, keep with next...); multilevel lists as in AhkWord (define, change and keep each
   level's number format, text such as 1.1.1., indent and start; all nine levels); Format Painter; Change Case; more
   find options (done: whole words, wildcards, regular expressions, ^p across paragraphs)
-- [ ] **6. Pages:** the ruler; section breaks (done: Layout > Breaks, Section start, Ctrl+Enter page break); columns (done: Layout > Columns, presets and dialog); line numbers; table properties (done: Table tab Cell Size and Alignment, Table Properties dialog);  picture properties (done: Picture Format tab, size, wrap, position, alt text, drag in page view); Tab types a tab
+- [ ] **6. Pages:** the ruler; section breaks (done: Layout > Breaks, Section start, Ctrl+Enter page break); columns (done: Layout > Columns, presets and dialog); line numbers (done: Layout > Line Numbers, options dialog, page view); section breaks removable (Breaks menu, Backspace/Delete, page-view marks with ¶); table properties (done: Table tab Cell Size and Alignment, Table Properties dialog);  picture properties (done: Picture Format tab, size, wrap, position, alt text, drag in page view); Tab types a tab
 - [ ] **7. References and styles:** cross-references, updating the table of contents and fields, bookmarks; new and
   changed styles, Copy Styles from Document
 - [ ] **8. Formats and parts:** RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,

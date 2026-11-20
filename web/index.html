@@ -621,6 +621,13 @@ async function breaksChecks() {
   const want = JSON.stringify(ui.ribbon?.["Section break (Continuous)"] ?? "Section break (Continuous)");
   out.push(`section ${sections().length === 2 && sections()[1].dataset.sectionType === "continuous" ? "ok" : `FAILED (${sections().length})`}`);
   out.push(`line ${line === want ? "ok" : `FAILED (${line})`}`);
+  // Remove section break (the caret is in the first section): back to one section, and Undo restores the break.
+  ribbon.exec("removeSectionBreak");
+  await frame();
+  out.push(`remove ${sections().length === 1 ? "ok" : `FAILED (${sections().length})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`remove undo ${sections().length === 2 ? "ok" : `FAILED (${sections().length})`}`);
   ribbon.exec("undo");
   await frame();
   out.push(`undo ${sections().length === 1 ? "ok" : `FAILED (${sections().length})`}`);
@@ -711,6 +718,39 @@ async function tablePropertiesChecks() {
   const dialog = document.querySelector('#app dialog[data-dxr="tabledialog"]');
   out.push(`dialog opens ${opened && dialog?.open ? "ok" : "FAILED"}`);
   dialog?.querySelector('button[value="cancel"]')?.click();
+  return out.join(", ");
+}
+
+// Line numbers: in page view, Continuous numbers each line in the margin, None takes them away, one undo brings them
+// back; in the continuous view none show.
+async function lineNumbersChecks() {
+  const out = [];
+  const view = savedView.paginated;
+  openInContinuousView();
+  ribbon.openBlank("line-numbers.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "One\nTwo\nThree" });
+  await frame();
+  applyView({ paginated: true });
+  await frame();
+  const first = document.querySelector('#app .page-box [data-anchor][contenteditable="true"]');
+  first?.focus();
+  first?.click();
+  const numbers = () => Array.from(document.querySelectorAll("#app .docx-line-numbers span")).map((s) => s.textContent).join(" ");
+  await ribbon.exec("lineNumbers", { countBy: 1, restart: "continuous" });
+  await frame(); await frame();
+  out.push(`on ${numbers() === "1 2 3" ? "ok" : `FAILED (${numbers()})`}`);
+  await ribbon.exec("lineNumbers", { countBy: 0 });
+  await frame(); await frame();
+  out.push(`none ${numbers() === "" ? "ok" : `FAILED (${numbers()})`}`);
+  ribbon.exec("undo");
+  await frame(); await frame();
+  out.push(`undo ${numbers() === "1 2 3" ? "ok" : `FAILED (${numbers()})`}`);
+  applyView({ paginated: false });
+  await frame();
+  out.push(`continuous view ${numbers() === "" ? "ok" : `FAILED (${numbers()})`}`);
+  applyView({ paginated: view });
   return out.join(", ");
 }
 
@@ -2191,6 +2231,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "pictures: " + (await pictureChecks()) });
       post({ type: "log", text: "tab key: " + (await tabChecks()) });
       post({ type: "log", text: "table properties: " + (await tablePropertiesChecks()) });
+      post({ type: "log", text: "line numbers: " + (await lineNumbersChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
