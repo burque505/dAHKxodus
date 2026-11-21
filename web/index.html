@@ -754,6 +754,43 @@ async function lineNumbersChecks() {
   return out.join(", ");
 }
 
+// Ruler: View > Ruler shows it; tab stops set by command show on it and one undo takes them away; the Tabs dialog
+// opens; the ruler's indent marker follows a left indent.
+async function rulerChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("ruler.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "One	Two" });
+  await frame();
+  const shown = !!ribbon.control("showruler")?.checked;
+  ribbon.setRulerVisible(true);
+  document.querySelector('#app [data-anchor][contenteditable="true"]')?.focus();
+  await frame(); await frame();
+  const ruler = document.querySelector('#app [data-dxr="ruler"]');
+  out.push(`shown ${ruler && !ruler.hidden && ruler.querySelector('[data-mark="leftIndent"]') ? "ok" : "FAILED"}`);
+  const stops = () => ruler?.querySelectorAll('[data-mark="tab"]').length ?? -1;
+  await ribbon.exec("tabStops", { stops: [{ positionTwips: 1440 }, { positionTwips: 4320, alignment: "right", leader: "dot" }] });
+  await frame(); await frame();
+  out.push(`tab stops ${stops() === 2 ? "ok" : `FAILED (${stops()})`}`);
+  ribbon.exec("undo");
+  await frame(); await frame();
+  out.push(`undo ${stops() === 0 ? "ok" : `FAILED (${stops()})`}`);
+  await ribbon.exec("paragraphFormat", { leftIndent: 720 });
+  await frame(); await frame();
+  const s = ribbon.editor.rulerState();
+  const box = ruler?.querySelector('[data-mark="leftIndent"]')?.getBoundingClientRect();
+  const expected = s ? s.originLeft + 720 * s.pxPerTwip : NaN;
+  out.push(`indent marker ${box && Math.abs(box.left + box.width / 2 - expected) < 1.5 ? "ok" : `FAILED (${box?.left} vs ${expected})`}`);
+  const opened = ribbon.openTabsDialog();
+  const dialog = document.querySelector('#app dialog[data-dxr="tabsdialog"]');
+  out.push(`tabs dialog ${opened && dialog?.open ? "ok" : "FAILED"}`);
+  dialog?.querySelector('button[value="cancel"]')?.click();
+  ribbon.setRulerVisible(shown);
+  return out.join(", ");
+}
+
 // Tab: in a plain paragraph it types a tab (a w:tab) and the focus stays in the document.
 async function tabChecks() {
   const out = [];
@@ -2009,6 +2046,7 @@ const savedView = {
   comments: viewParams.has("comments") ? viewParams.get("comments") === "1" : null,
   rail: viewParams.has("rail") ? viewParams.get("rail") === "1" : null,
   marks: viewParams.has("marks") ? viewParams.get("marks") === "1" : null,
+  ruler: viewParams.has("ruler") ? viewParams.get("ruler") === "1" : null,
 };
 function viewState() {
   return {
@@ -2017,6 +2055,7 @@ function viewState() {
     comments: !!ribbon.control("showcomments")?.checked,
     rail: !!ribbon.control("showrail")?.checked,
     marks: ribbon.control("showmarks")?.getAttribute("aria-pressed") === "true",
+    ruler: !!ribbon.control("showruler")?.checked,
   };
 }
 function setChecked(name, on) {
@@ -2072,6 +2111,7 @@ function openInContinuousView() {
 // The parts that belong to the open document (zoom, comments) are applied again after each open.
 function applyView(v) {
   setChecked("showrail", v.rail);
+  setChecked("showruler", v.ruler);
   if (v.marks != null) ribbon.setShowFormattingMarks(v.marks);    // (Show/Hide ¶)
   if (!ribbon.editor) return;
   if (v.paginated != null && !!ribbon.control("paginated")?.checked !== v.paginated)
@@ -2232,6 +2272,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "tab key: " + (await tabChecks()) });
       post({ type: "log", text: "table properties: " + (await tablePropertiesChecks()) });
       post({ type: "log", text: "line numbers: " + (await lineNumbersChecks()) });
+      post({ type: "log", text: "ruler: " + (await rulerChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });

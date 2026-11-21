@@ -244,10 +244,10 @@ class MainForm : Form {
         Log($"user \"{user}\"{(initials == "" ? "" : $" ({initials})")} from {from}; language {Lang.Code}");
         query.Add("user=" + Uri.EscapeDataString(user));
         if (initials != "") query.Add("initials=" + Uri.EscapeDataString(initials));
-        // The view the last window closed with: page or continuous, zoom, comments, the rail, Show/Hide ¶ (not for a
+        // The view the last window closed with: page or continuous, zoom, comments, the rail, Show/Hide ¶, the ruler (not for a
         // measure run).
         if (measureOut == "")
-            foreach (var key in new[] { "Paginated", "Zoom", "Comments", "Rail", "Marks" }) {
+            foreach (var key in new[] { "Paginated", "Zoom", "Comments", "Rail", "Marks", "Ruler" }) {
                 var value = Settings.Get("View", key);
                 if (value != "") query.Add(key.ToLowerInvariant() + "=" + Uri.EscapeDataString(value));
             }
@@ -826,6 +826,7 @@ class MainForm : Form {
                         ["Comments"] = Str("comments") is "True" or "true" ? "1" : "0",
                         ["Rail"] = Str("rail") is "True" or "true" ? "1" : "0",
                         ["Marks"] = Str("marks") is "True" or "true" ? "1" : "0",
+                        ["Ruler"] = Str("ruler") is "True" or "true" ? "1" : "0",
                     };
                     if (view["Zoom"] == "") view.Remove("Zoom");
                     break;

@@ -39,7 +39,7 @@ public static class AppFolders {
 //   [User]    Name, Initials                         (UserIdentity)
 //   [General] Language, RecentMax, OpenLastAtStart, AutosaveMinutes
 //   [Window]  Left, Top, Width, Height, Maximized    (WindowPlacement)
-//   [View]    Paginated, Zoom, Comments, Rail        (the page's view, restored at the next start)
+//   [View]    Paginated, Zoom, Comments, Rail, Marks, Ruler        (the page's view, restored at the next start)
 //   [Recent]  File1, File2, ...                      (RecentFiles)
 //   [MacroHotkeys]  <macro file name>=Ctrl+Alt+D    (MacroHotkeys, host\MacroHotkeys.cs)
 public static class Settings {

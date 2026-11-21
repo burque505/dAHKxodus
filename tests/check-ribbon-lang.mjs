@@ -14,6 +14,9 @@ const { COLUMNS_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_
 const { PICTURE_DIALOG_HTML, PICTURE_MENU_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-picture-dialog.js")).href);
 const { TABLE_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-table-dialog.js")).href);
 const { LINE_NUMBERS_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-linenumbers-dialog.js")).href);
+const { TABS_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-tabs-dialog.js")).href);
+// (the ruler's tooltips and tab-kind names, written from code)
+const { RULER_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ruler.js")).href);
 const { LIST_DIALOG_HTML, LIST_DIALOG_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-list-dialog.js")).href);
 // (the List Levels dialog writes its rows' choices from code: they are listed as texts of their own)
 // (and the find bar's Special menu, made from code for each mode, and its "Invalid" for a pattern that isn't one)
@@ -24,11 +27,12 @@ for (const mode of [{}, { wildcards: true }, { regex: true }])
 // (and the status line's texts the ribbon writes from code)
 const { RIBBON_STATUS_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-chrome.js")).href);
 for (const t of Object.values(RIBBON_STATUS_TEXTS ?? {})) FIND_TEXTS.add(t);
+for (const t of Object.values(RULER_TEXTS ?? {})) FIND_TEXTS.add(t);
 // (and the continuous view's section-break line, the editor's CSS: the page sets its custom properties)
 for (const m of readFileSync(join(root, "web/node_modules/docxodus/dist/editor.js"), "utf8")
   .matchAll(/--docx-section-break-\w+, "([^"]+)"/g)) FIND_TEXTS.add(m[1]);
 const RIBBON_HTML = chrome + PARAGRAPH_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "")
-  + LIST_DIALOG_HTML + COLUMNS_DIALOG_HTML + PICTURE_DIALOG_HTML + PICTURE_MENU_HTML + TABLE_DIALOG_HTML + LINE_NUMBERS_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
+  + LIST_DIALOG_HTML + COLUMNS_DIALOG_HTML + PICTURE_DIALOG_HTML + PICTURE_MENU_HTML + TABLE_DIALOG_HTML + LINE_NUMBERS_DIALOG_HTML + TABS_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
 const decode = (s) => s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&times;/g, "×").replace(/&amp;/g, "&")
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ");
 const html = RIBBON_HTML.replace(/<!--[\s\S]*?-->/g, "").replace(/<style[\s\S]*?<\/style>/g, "").replace(/<svg[\s\S]*?<\/svg>/g, "");
