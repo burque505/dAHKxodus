@@ -792,6 +792,38 @@ async function bookmarkChecks() {
   return out.join(", ");
 }
 
+// Navigation Pane: it lists the headings; a heading moves with its text (one undo); Promote changes its level.
+async function navChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("navigation.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "Alpha\nalpha text\nBeta\nbeta text" });
+  await frame();
+  const blocks = () => bodyBlocks();
+  for (const i of [0, 2]) {
+    blocks()[i].focus();
+    await ribbon.exec("style", { styleId: "Heading1" });
+  }
+  ribbon.setNavigationPaneVisible(true);
+  await frame(); await frame();
+  const pane = () => Array.from(document.querySelectorAll('#app [data-dxr="navpane"] .dxr-navtext')).map((t) => t.textContent).join(" | ");
+  out.push(`listed ${pane() === "Alpha | Beta" ? "ok" : `FAILED (${pane()})`}`);
+  await ribbon.exec("moveHeading", { heading: "Beta", to: "Alpha", position: "before" });
+  await frame();
+  const texts = () => blocks().map((b) => b.textContent.trim()).join(" ");
+  out.push(`move ${texts() === "Beta beta text Alpha alpha text" ? "ok" : `FAILED (${texts()})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${texts() === "Alpha alpha text Beta beta text" ? "ok" : `FAILED (${texts()})`}`);
+  await ribbon.exec("headingLevel", { heading: "Beta", level: 2 });
+  const levels = () => ribbon.exec("outline").map((h) => `${h.level}${h.text}`).join(" ");
+  out.push(`promote ${levels() === "1Alpha 2Beta" ? "ok" : `FAILED (${levels()})`}`);
+  ribbon.setNavigationPaneVisible(false);
+  return out.join(", ");
+}
+
 // Ruler: View > Ruler shows it; tab stops set by command show on it and one undo takes them away; the Tabs dialog
 // opens; the ruler's indent marker follows a left indent.
 async function rulerChecks() {
@@ -2085,6 +2117,7 @@ const savedView = {
   rail: viewParams.has("rail") ? viewParams.get("rail") === "1" : null,
   marks: viewParams.has("marks") ? viewParams.get("marks") === "1" : null,
   ruler: viewParams.has("ruler") ? viewParams.get("ruler") === "1" : null,
+  nav: viewParams.has("nav") ? viewParams.get("nav") === "1" : null,
 };
 function viewState() {
   return {
@@ -2094,6 +2127,7 @@ function viewState() {
     rail: !!ribbon.control("showrail")?.checked,
     marks: ribbon.control("showmarks")?.getAttribute("aria-pressed") === "true",
     ruler: !!ribbon.control("showruler")?.checked,
+    nav: !!ribbon.control("shownav")?.checked,
   };
 }
 function setChecked(name, on) {
@@ -2150,6 +2184,7 @@ function openInContinuousView() {
 function applyView(v) {
   setChecked("showrail", v.rail);
   setChecked("showruler", v.ruler);
+  setChecked("shownav", v.nav);
   if (v.marks != null) ribbon.setShowFormattingMarks(v.marks);    // (Show/Hide ¶)
   if (!ribbon.editor) return;
   if (v.paginated != null && !!ribbon.control("paginated")?.checked !== v.paginated)
@@ -2311,6 +2346,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "table properties: " + (await tablePropertiesChecks()) });
       post({ type: "log", text: "line numbers: " + (await lineNumbersChecks()) });
   post({ type: "log", text: "bookmarks: " + (await bookmarkChecks()) });
+  post({ type: "log", text: "navigation pane: " + (await navChecks()) });
       post({ type: "log", text: "ruler: " + (await rulerChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
