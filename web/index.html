@@ -754,6 +754,44 @@ async function lineNumbersChecks() {
   return out.join(", ");
 }
 
+// Bookmarks: Add (and move by the same name), Go To selects the text, Delete, one undo each; View > Bookmarks
+// draws the brackets.
+async function bookmarkChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("bookmarks.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "One\nTwo\nThree" });
+  await frame();
+  const names = () => ribbon.exec("bookmarks").map((b) => `${b.name}=${b.text}`).join(" ");
+  caretAtStart();
+  await ribbon.exec("addBookmark", { name: "First" });
+  out.push(`add ${names() === "First=" ? "ok" : `FAILED (${names()})`}`);
+  const blocks = document.querySelectorAll('#app [data-anchor][contenteditable="true"]');
+  const third = blocks[blocks.length - 1];
+  third.focus();
+  const range = document.createRange();
+  range.selectNodeContents(third);
+  getSelection().removeAllRanges(); getSelection().addRange(range);
+  await ribbon.exec("addBookmark", { name: "First" });
+  out.push(`move ${names() === "First=Three" ? "ok" : `FAILED (${names()})`}`);
+  caretAtStart();
+  await ribbon.exec("goToBookmark", { name: "First" });
+  out.push(`go to ${getSelection().toString() === "Three" ? "ok" : `FAILED (${getSelection().toString()})`}`);
+  ribbon.setShowBookmarks(true);
+  await frame(); await frame();
+  const brackets = document.querySelectorAll(".dxr-bkmark").length;
+  out.push(`brackets ${brackets === 2 ? "ok" : `FAILED (${brackets})`}`);
+  ribbon.setShowBookmarks(false);
+  await ribbon.exec("deleteBookmark", { name: "First" });
+  out.push(`delete ${names() === "" ? "ok" : `FAILED (${names()})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${names() === "First=Three" ? "ok" : `FAILED (${names()})`}`);
+  return out.join(", ");
+}
+
 // Ruler: View > Ruler shows it; tab stops set by command show on it and one undo takes them away; the Tabs dialog
 // opens; the ruler's indent marker follows a left indent.
 async function rulerChecks() {
@@ -1476,7 +1514,7 @@ function takenShortcuts() {
     ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")],
     ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")], ["Ctrl+Shift+C", "Copy formatting"],
     ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")], ["Shift+F3", tr("Change Case (Shift+F3 cycles)")],
-    ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")]])
+    ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")], ["Ctrl+Shift+F5", tr("Bookmark")]])
     taken.push({ keys, name });
   return taken;
 }
@@ -2272,6 +2310,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "tab key: " + (await tabChecks()) });
       post({ type: "log", text: "table properties: " + (await tablePropertiesChecks()) });
       post({ type: "log", text: "line numbers: " + (await lineNumbersChecks()) });
+  post({ type: "log", text: "bookmarks: " + (await bookmarkChecks()) });
       post({ type: "log", text: "ruler: " + (await rulerChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
