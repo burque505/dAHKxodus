@@ -74,7 +74,7 @@ return 0;
 
 class MainForm : Form {
     /// dAHKxodus's version (four parts, the fourth always 0 for the Microsoft Store): the AutoHotkey side, the installer and the About box read it here.
-    public const string Version = "0.0.5.0";
+    public const string Version = "0.0.6.0";
     public static string LogPath = "";
     static readonly DateTime ProcessStart = Process.GetCurrentProcess().StartTime;
 
