@@ -631,5 +631,11 @@
   "Paragraph number": "Número de párrafo",
   "Paragraph number (no context)": "Número de párrafo (sin contexto)",
   "Paragraph number (full context)": "Número de párrafo (contexto completo)",
-  "Above/below": "Más arriba o más abajo"
+  "Above/below": "Más arriba o más abajo",
+  "↻ Update Table": "↻ Actualizar tabla",
+  "Update the table of contents: its headings and page numbers (F9 updates the fields in the selection)": "Actualizar la tabla de contenido: sus títulos y números de página (F9 actualiza los campos de la selección)",
+  "Update Field": "Actualizar campo",
+  "Field": "Campo",
+  "Fields updated": "Campos actualizados",
+  "Fields cannot be updated here, nor while changes are tracked": "Los campos no se pueden actualizar aquí, ni mientras se controlan los cambios"
 }

@@ -1459,13 +1459,19 @@ async function preparePrint(id) {
     if (!viewBeforePrint) viewBeforePrint = viewState();
     applyView({ paginated: true, zoom: 1 });
     // (the pages are laid out over a few frames; wait until their count stops changing, at most 3 s)
-    let count = -1, until = performance.now() + 3000;
-    while (performance.now() < until) {
-      await frame();
-      const now = document.querySelectorAll("#app .page-box").length;
-      if (now > 0 && now === count) break;
-      count = now;
-    }
+    const settle = async () => {
+      let count = -1, until = performance.now() + 3000;
+      while (performance.now() < until) {
+        await frame();
+        const now = document.querySelectorAll("#app .page-box").length;
+        if (now > 0 && now === count) break;
+        count = now;
+      }
+    };
+    await settle();
+    // Word's "Update fields before printing": contents, cross-references and page references made current from
+    // these pages (no edit when the document has none), then laid out again.
+    if (ribbon.updateFields?.("all")) await settle();
     const pages = Array.from(document.querySelectorAll("#app .page-box"));
     if (pages.length === 0) throw new Error("the page view has no pages");
     // (no caret: the paragraph it is in is washed on screen)
