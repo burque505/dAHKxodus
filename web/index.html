@@ -792,6 +792,36 @@ async function bookmarkChecks() {
   return out.join(", ");
 }
 
+// Cross-reference: a reference to a heading's text, as a hyperlink, through a hidden _Ref bookmark; one undo.
+async function crossRefChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("crossref.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "Intro" + String.fromCharCode(10) + "See " });
+  await frame();
+  caretAtStart();
+  await ribbon.exec("style", { styleId: "Heading1" });
+  const blocks = document.querySelectorAll('#app [data-anchor][contenteditable="true"]');
+  const last = blocks[blocks.length - 1];
+  last.focus();
+  const range = document.createRange();
+  range.selectNodeContents(last); range.collapse(false);
+  getSelection().removeAllRanges(); getSelection().addRange(range);
+  await ribbon.exec("crossReference", { type: "heading", target: "Intro", insert: "text", hyperlink: true });
+  await frame();
+  const field = () => document.querySelector('#app [data-field="REF"][data-field-target^="_Ref"]');
+  out.push(`insert ${field()?.textContent === "Intro" ? "ok" : `FAILED (${field()?.textContent})`}`);
+  const hidden = ribbon.exec("bookmarks", { hidden: true }).length;
+  out.push(`ref bookmark ${hidden === 1 ? "ok" : `FAILED (${hidden})`}`);
+  ribbon.exec("undo");
+  await frame();
+  const after = ribbon.exec("bookmarks", { hidden: true }).length;
+  out.push(`undo ${!field() && after === 0 ? "ok" : `FAILED (${after})`}`);
+  return out.join(", ");
+}
+
 // Navigation Pane: it lists the headings; a heading moves with its text (one undo); Promote changes its level.
 async function navChecks() {
   const out = [];
@@ -1546,7 +1576,8 @@ function takenShortcuts() {
     ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")],
     ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")], ["Ctrl+Shift+C", "Copy formatting"],
     ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")], ["Shift+F3", tr("Change Case (Shift+F3 cycles)")],
-    ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")], ["Ctrl+Shift+F5", tr("Bookmark")]])
+    ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")], ["Ctrl+Shift+F5", tr("Bookmark")],
+    ["Ctrl+Home", "Start of document"], ["Ctrl+End", "End of document"], ["Ctrl+PageUp", "Previous page"], ["Ctrl+PageDown", "Next page"]])
     taken.push({ keys, name });
   return taken;
 }
@@ -2346,6 +2377,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "table properties: " + (await tablePropertiesChecks()) });
       post({ type: "log", text: "line numbers: " + (await lineNumbersChecks()) });
   post({ type: "log", text: "bookmarks: " + (await bookmarkChecks()) });
+  post({ type: "log", text: "cross-references: " + (await crossRefChecks()) });
   post({ type: "log", text: "navigation pane: " + (await navChecks()) });
       post({ type: "log", text: "ruler: " + (await rulerChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });

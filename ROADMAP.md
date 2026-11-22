@@ -26,7 +26,8 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
 - [x] **6. Pages** (0.0.6.0): the ruler (done: View > Ruler, indents, tab stops, Tabs dialog, margins, table columns); section breaks (done: Layout > Breaks, Section start, Ctrl+Enter page break); columns (done: Layout > Columns, presets and dialog); line numbers (done: Layout > Line Numbers, options dialog, page view); section breaks removable (Breaks menu, Backspace/Delete, page-view marks with ¶); table properties (done: Table tab Cell Size and Alignment, Table Properties dialog);  picture properties (done: Picture Format tab, size, wrap, position, alt text, drag in page view); Tab types a tab
 - [ ] **7. References and styles:** bookmarks (done: Insert > Bookmark, Ctrl+Shift+F5, View > Bookmarks, links to a
   bookmark); the Navigation Pane (done: View > Navigation Pane, go to, drag to move with text, Word's right-click
-  menu; the Styles box shows the caret's style); cross-references, updating the table of contents and fields; new and
+  menu; the Styles box shows the caret's style); cross-references (done: Insert > Cross-reference to a heading, bookmark
+  or numbered item; the Bookmark and Cross-reference dialogs stay open beside the text; Ctrl+Home/End, Ctrl+PgUp/PgDn); updating the table of contents and fields; new and
   changed styles, Copy Styles from Document; perhaps Outline View (collapse and expand under headings, show levels 1 to N)
 - [ ] **8. Formats and parts:** RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
   Word or Pandoc); opening those formats; templates and snippets
