@@ -29,11 +29,16 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   menu; the Styles box shows the caret's style); cross-references (done: Insert > Cross-reference to a heading, bookmark
   or numbered item; the Bookmark and Cross-reference dialogs stay open beside the text; Ctrl+Home/End, Ctrl+PgUp/PgDn); updating the table of contents and fields (done: References > Update Table,
   F9, right-click Update Field, Insert TOC fills at once, fields updated before printing); new and
-  changed styles, Copy Styles from Document; perhaps Outline View (collapse and expand under headings, show levels 1 to N)
+  changed styles, Copy Styles from Document; a Styles pane (every style, with Modify, New and Update to Match); Insert
+  Caption and a table of figures (captions numbered by fields that Update Table renumbers); perhaps Outline View
+  (collapse and expand under headings, show levels 1 to N)
 - [ ] **8. Formats and parts:** RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
   Word or Pandoc); opening those formats; templates and snippets
 - [ ] **9. Spanish:** the whole program, the ribbon included
 - [ ] **10. Text boxes:** editing in them, then inserting and moving them
+- [ ] **11. Compare and find commands:** Review > Compare two versions of a document, the differences shown as
+  tracked changes (Docxodus's own comparison); Alt+Q and a search box on the title bar that open the command palette,
+  as Word's search box does
 
 Alongside every milestone: faster opening of long documents, and the fork kept level with Docxodus itself.
 

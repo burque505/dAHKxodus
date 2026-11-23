@@ -1582,7 +1582,7 @@ function takenShortcuts() {
     ["Ctrl+I", tr("Italic")], ["Ctrl+U", tr("Underline")], ["Ctrl+F", tr("Find")], ["Ctrl+H", tr("Replace")],
     ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")], ["Ctrl+Shift+C", "Copy formatting"],
     ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")], ["Shift+F3", tr("Change Case (Shift+F3 cycles)")],
-    ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")], ["Ctrl+Shift+F5", tr("Bookmark")],
+    ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")], ["Ctrl+Shift+F5", tr("Bookmark")], ["Ctrl+D", tr("Font settings")],
     ["Ctrl+Home", "Start of document"], ["Ctrl+End", "End of document"], ["Ctrl+PageUp", "Previous page"], ["Ctrl+PageDown", "Next page"]])
     taken.push({ keys, name });
   return taken;
@@ -1973,8 +1973,11 @@ function paletteItems() {
     const label = squash(prompt?.textContent).replace(/^[^\p{L}\p{N}]+/u, "").replace(/[….:]+$/, "")
       || squash(select.title) || squash(select.getAttribute("aria-label"));
     const off = select.disabled || inHiddenTab(select);
+    // (The computer's fonts, hundreds of them, stay in the Font box: the palette lists the document's and the common ones.)
+    const allFonts = ui.ribbon?.["All fonts"] ?? "All fonts";
     for (const o of options) {
       if (o.value === "" || o.disabled) continue;
+      if (o.parentElement?.tagName === "OPTGROUP" && o.parentElement.label === allFonts) continue;
       const name = `${label}: ${squash(o.textContent)}`;
       if (names.has(name.toLowerCase())) continue;
       add({ key: `s:${select.dataset.dxr ?? label}:${o.value}`, name, where: placeOf(select), description: squash(select.title), keys: "",
@@ -2312,6 +2315,10 @@ host?.addEventListener("message", async (e) => {
     } else if (m.type === "listDefaults") {
       // The levels new lists start from (List levels > Also for new documents), kept by the host.
       try { ribbon.setListDefaults(JSON.parse(m.levels)); } catch (error) { post({ type: "log", text: "list defaults: " + error }); }
+    } else if (m.type === "fonts") {
+      // The computer's fonts (the host lists them): in the Font box and the Font and style dialogs.
+      ribbon.setSystemFonts?.(m.names ?? []);
+      ribbon.setRecentFonts?.(m.recent ?? []);
     } else if (m.type === "ui") {
       Object.assign(ui, m);
       relabel();
@@ -2482,6 +2489,7 @@ ribbon = mountRibbon("#app", {
   onFormattingMarksChange: () => setTimeout(reportView, 0),
   // Find's options (the find bar's Options menu): the host keeps them ([Find] Options) for every window.
   onFindOptionsChange: (options) => post({ type: "findOptions", options: Object.keys(options).join(",") }),
+  onRecentFontsChange: (names) => post({ type: "recentFonts", names }),
   // Paste: Word's clipboard HTML names its pictures as files in the temporary folder, which the page cannot read; the
   // host reads them (EngineHost.ReadPastedImage). Pictures on the web the page fetches itself.
   resolvePasteImage: async (src) => {

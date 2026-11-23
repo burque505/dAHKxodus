@@ -378,6 +378,17 @@ class MainForm : Form {
         Log($"recovery: recovered \"{orphan.Info.Name}\", title \"{Text}\", copy left behind {(File.Exists(orphan.DocxPath) ? "STILL THERE" : "removed")}");
     }
 
+    // The fonts installed on this computer, for the ribbon's Font box and the Font and style dialogs (a page cannot
+    // list them itself), read once, by the first window; and the recently used ones ([Fonts] Recent, newest first,
+    // kept by "recentFonts"), listed first. A measure run starts with none.
+    static string[]? installedFonts;
+    void SendFonts() {
+        installedFonts ??= new System.Drawing.Text.InstalledFontCollection().Families.Select(f => f.Name).ToArray();
+        var recent = measureOut != "" ? Array.Empty<string>()
+            : Settings.Get("Fonts", "Recent").Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Send(new { type = "fonts", names = installedFonts, recent });
+    }
+
     // The labels the page adds to the ribbon, in the user's language.
     void SendUi() => Send(new {
         type = "ui", units = Lang.T("page.units"), settings = Lang.T("page.settings"), settingsTip = Lang.T("page.settingsTip"),
@@ -725,6 +736,7 @@ class MainForm : Form {
                 case "ready":
                     Log($"editor ready {clock.ElapsedMilliseconds} ms ({Str("engine")} engine; page: {Str("sinceNavigation")} ms since navigation, scripts {Str("scripts")} ms, boot {Str("boot")} ms)");
                     SendUi();
+                    SendFonts();
                     if (measureOut == "") SendRecent();
                     SendMacros();    // (their hotkeys work from the start)
                     SendHooks();
@@ -868,6 +880,12 @@ class MainForm : Form {
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                         Log("headline case: " + ex.Message);
                     }
+                    break;
+                case "recentFonts":    // a font was applied: [Fonts] Recent, for the next window and the next start
+                    if (measureOut != "") { Log("recent fonts (measure run, not kept): " + Str("names")); break; }
+                    if (m.TryGetProperty("names", out var names) && names.ValueKind == JsonValueKind.Array)
+                        Settings.Set("Fonts", "Recent", string.Join("|", names.EnumerateArray().Select(n => n.GetString() ?? "")
+                            .Where(n => n != "" && !n.Contains('|'))));
                     break;
                 case "findOptions":    // the find bar's Options: [Find] Options, for every window
                     if (measureOut != "") { Log("find options (measure run, not kept): " + Str("options")); break; }
