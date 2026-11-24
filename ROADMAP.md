@@ -41,7 +41,9 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   tracked changes (Docxodus's own comparison); Alt+Q and a search box on the title bar that open the command palette,
   as Word's search box does
 
-Alongside every milestone: faster opening of long documents, and the fork kept level with Docxodus itself.
+Alongside every milestone: faster opening of long documents, and the fork kept level with Docxodus itself; in page
+view, laying out only the pages from an edit on (today an edit that overfills a page lays out the whole document
+again, a pause on long documents).
 
 ## Smaller downloads
 
