@@ -24,18 +24,18 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   level's number format, text such as 1.1.1., indent and start; all nine levels); Format Painter; Change Case; more
   find options (done: whole words, wildcards, regular expressions, ^p across paragraphs)
 - [x] **6. Pages** (0.0.6.0): the ruler (done: View > Ruler, indents, tab stops, Tabs dialog, margins, table columns); section breaks (done: Layout > Breaks, Section start, Ctrl+Enter page break); columns (done: Layout > Columns, presets and dialog); line numbers (done: Layout > Line Numbers, options dialog, page view); section breaks removable (Breaks menu, Backspace/Delete, page-view marks with ¶); table properties (done: Table tab Cell Size and Alignment, Table Properties dialog);  picture properties (done: Picture Format tab, size, wrap, position, alt text, drag in page view); Tab types a tab
-- [ ] **7. References and styles:** bookmarks (done: Insert > Bookmark, Ctrl+Shift+F5, View > Bookmarks, links to a
+- [x] **7. References and styles** (0.0.7.0): bookmarks (done: Insert > Bookmark, Ctrl+Shift+F5, View > Bookmarks, links to a
   bookmark); the Navigation Pane (done: View > Navigation Pane, go to, drag to move with text, Word's right-click
   menu; the Styles box shows the caret's style); cross-references (done: Insert > Cross-reference to a heading, bookmark
   or numbered item; the Bookmark and Cross-reference dialogs stay open beside the text; Ctrl+Home/End, Ctrl+PgUp/PgDn); updating the table of contents and fields (done: References > Update Table,
   F9, right-click Update Field, Insert TOC fills at once, fields updated before printing); new and
   changed styles (done: Modify Style, New Style and Update to Match from the Styles box, the Font dialog and Ctrl+D,
   character styles, the computer's fonts and recently used ones), Copy Styles from Document (done: from a
-  document or template, as Word's Organizer copies them in); a Styles pane (every style, with Modify, New and Update to Match); Insert
-  Caption and a table of figures (captions numbered by fields that Update Table renumbers); Outline View (done: View >
+  document or template, as Word's Organizer copies them in); Outline View (done: View >
   Outline and the Outlining tab: collapse and expand, Show Level, promote, demote and move with Word's Alt+Shift keys;
   Left and Right now cross paragraphs everywhere)
-- [ ] **8. Formats and parts:** RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
+- [ ] **8. Formats and parts:** left over from 7: a Styles pane (every style, with Modify, New and Update to Match),
+  Insert Caption and a table of figures (captions numbered by fields that Update Table renumbers); RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
   Word or Pandoc); opening those formats; templates and snippets
 - [ ] **9. Spanish:** the whole program, the ribbon included
 - [ ] **10. Text boxes:** editing in them, then inserting and moving them
