@@ -822,6 +822,42 @@ async function crossRefChecks() {
   return out.join(", ");
 }
 
+// Copy Styles from Document: a file picked in the dialog is read by the engine, Copy brings a style in (one undo).
+async function copyStylesChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("source.docx");
+  await frame();
+  ribbon.exec("setStyle", { name: "Fancy Note", paragraph: { alignment: "center" } });
+  const bytes = ribbon.save();
+  ribbon.openBlank("copystyles.docx");
+  caretAtStart(); relabel();
+  await frame();
+  const has = () => ribbon.exec("styles").some((s) => s.id === "FancyNote");
+  out.push(`open ${ribbon.openCopyStylesDialog() ? "ok" : "FAILED"}`);
+  const dialog = document.querySelector('#app dialog[data-dxr="copystylesdialog"]');
+  const input = dialog.querySelector('[data-cs="file"]');
+  const transfer = new DataTransfer();
+  transfer.items.add(new File([bytes], "source.dotx"));
+  input.files = transfer.files;
+  input.dispatchEvent(new Event("change"));
+  const from = dialog.querySelector('[data-cs="from"]');
+  for (let i = 0; i < 50 && !from.querySelector('option[value="FancyNote"]'); i++) await frame();
+  const option = from.querySelector('option[value="FancyNote"]');
+  out.push(`read ${option ? "ok" : "FAILED"}`);
+  if (option) {
+    option.selected = true;
+    dialog.querySelector('[data-cs="copy"]').click();
+    for (let i = 0; i < 50 && !has(); i++) await frame();
+    out.push(`copy ${has() ? "ok" : "FAILED"}`);
+  }
+  dialog.close();
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${!has() ? "ok" : "FAILED"}`);
+  return out.join(", ");
+}
+
 // Navigation Pane: it lists the headings; a heading moves with its text (one undo); Promote changes its level.
 async function navChecks() {
   const out = [];
@@ -2391,6 +2427,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "line numbers: " + (await lineNumbersChecks()) });
   post({ type: "log", text: "bookmarks: " + (await bookmarkChecks()) });
   post({ type: "log", text: "cross-references: " + (await crossRefChecks()) });
+  post({ type: "log", text: "copy styles: " + (await copyStylesChecks()) });
   post({ type: "log", text: "navigation pane: " + (await navChecks()) });
       post({ type: "log", text: "ruler: " + (await rulerChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });

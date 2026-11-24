@@ -19,6 +19,7 @@ const { BOOKMARK_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node
 const { CROSSREF_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-crossref-dialog.js")).href);
 const { FONT_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-font-dialog.js")).href);
 const { STYLE_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-style-dialog.js")).href);
+const { COPY_STYLES_DIALOG_HTML } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-copy-styles-dialog.js")).href);
 // (the ruler's tooltips and tab-kind names, written from code)
 const { RULER_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ruler.js")).href);
 const { LIST_DIALOG_HTML, LIST_DIALOG_TEXTS } = await import(pathToFileURL(join(root, "web/node_modules/docxodus/dist/ribbon-list-dialog.js")).href);
@@ -37,7 +38,7 @@ for (const m of readFileSync(join(root, "web/node_modules/docxodus/dist/editor.j
   .matchAll(/--docx-section-break-\w+, "([^"]+)"/g)) FIND_TEXTS.add(m[1]);
 const RIBBON_HTML = chrome + PARAGRAPH_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "")
   + LIST_DIALOG_HTML + COLUMNS_DIALOG_HTML + PICTURE_DIALOG_HTML + PICTURE_MENU_HTML + TABLE_DIALOG_HTML + LINE_NUMBERS_DIALOG_HTML + TABS_DIALOG_HTML + BOOKMARK_DIALOG_HTML + CROSSREF_DIALOG_HTML + FONT_DIALOG_HTML
-  + STYLE_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "") + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
+  + STYLE_DIALOG_HTML.replace(/<div class="dxr-dpreview"[\s\S]*?<\/div>/, "") + COPY_STYLES_DIALOG_HTML + [...LIST_DIALOG_TEXTS, ...FIND_TEXTS].map((t) => `<span>${t}</span>`).join("");
 const decode = (s) => s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&times;/g, "×").replace(/&amp;/g, "&")
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ");
 const html = RIBBON_HTML.replace(/<!--[\s\S]*?-->/g, "").replace(/<style[\s\S]*?<\/style>/g, "").replace(/<svg[\s\S]*?<\/svg>/g, "");
