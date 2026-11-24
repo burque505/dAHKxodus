@@ -32,8 +32,9 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   changed styles (done: Modify Style, New Style and Update to Match from the Styles box, the Font dialog and Ctrl+D,
   character styles, the computer's fonts and recently used ones), Copy Styles from Document (done: from a
   document or template, as Word's Organizer copies them in); a Styles pane (every style, with Modify, New and Update to Match); Insert
-  Caption and a table of figures (captions numbered by fields that Update Table renumbers); perhaps Outline View
-  (collapse and expand under headings, show levels 1 to N)
+  Caption and a table of figures (captions numbered by fields that Update Table renumbers); Outline View (done: View >
+  Outline and the Outlining tab: collapse and expand, Show Level, promote, demote and move with Word's Alt+Shift keys;
+  Left and Right now cross paragraphs everywhere)
 - [ ] **8. Formats and parts:** RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
   Word or Pandoc); opening those formats; templates and snippets
 - [ ] **9. Spanish:** the whole program, the ribbon included

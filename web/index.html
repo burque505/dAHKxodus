@@ -890,6 +890,42 @@ async function navChecks() {
   return out.join(", ");
 }
 
+// Outline View: it marks the levels; Collapse hides a heading's text; Demote and one undo; Close gives the view back.
+async function outlineChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("outline.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("pasteText", { text: "Alpha\nalpha text\nBeta\nbeta text" });
+  await frame();
+  const blocks = () => bodyBlocks();
+  for (const i of [0, 2]) {
+    blocks()[i].focus();
+    await ribbon.exec("style", { styleId: "Heading1" });
+  }
+  ribbon.exec("outlineView", { on: true });
+  await frame(); await frame();
+  const marks = () => blocks().map((b) => b.getAttribute("data-outline-sym")).join(" ");
+  out.push(`levels ${marks() === "plus body plus body" ? "ok" : `FAILED (${marks()})`}`);
+  blocks()[0].focus();
+  ribbon.exec("outlineCollapse");
+  await frame();
+  out.push(`collapse ${blocks()[1].hasAttribute("data-outline-hidden") ? "ok" : "FAILED"}`);
+  blocks()[2].focus();
+  ribbon.exec("outlineDemote");
+  await frame();
+  const levels = () => ribbon.exec("outline").map((h) => `${h.level}${h.text}`).join(" ");
+  out.push(`demote ${levels() === "1Alpha 2Beta" ? "ok" : `FAILED (${levels()})`}`);
+  ribbon.exec("undo");
+  await frame();
+  out.push(`undo ${levels() === "1Alpha 1Beta" ? "ok" : `FAILED (${levels()})`}`);
+  ribbon.exec("outlineView", { on: false });
+  await frame();
+  out.push(`close ${!document.querySelector("#app [data-outline-sym]") ? "ok" : "FAILED"}`);
+  return out.join(", ");
+}
+
 // Ruler: View > Ruler shows it; tab stops set by command show on it and one undo takes them away; the Tabs dialog
 // opens; the ruler's indent marker follows a left indent.
 async function rulerChecks() {
@@ -1619,7 +1655,11 @@ function takenShortcuts() {
     ["Ctrl+Shift+G", tr("Legal numbering (1., 1.1, 1.1.1)")], ["Ctrl+Shift+C", "Copy formatting"],
     ["Ctrl+Shift+V", "Paste formatting"], ["Ctrl+Alt+Shift+V", tr("Keep Text Only")], ["Shift+F3", tr("Change Case (Shift+F3 cycles)")],
     ["Ctrl+Shift+8", tr("Show/Hide ¶: paragraph marks and tabs (Ctrl+Shift+8)")], ["Ctrl+Shift+F5", tr("Bookmark")], ["Ctrl+D", tr("Font settings")],
-    ["Ctrl+Home", "Start of document"], ["Ctrl+End", "End of document"], ["Ctrl+PageUp", "Previous page"], ["Ctrl+PageDown", "Next page"]])
+    ["Ctrl+Home", "Start of document"], ["Ctrl+End", "End of document"], ["Ctrl+PageUp", "Previous page"], ["Ctrl+PageDown", "Next page"],
+    ["Alt+Shift+Left", tr("Promote (Alt+Shift+Left)")], ["Alt+Shift+Right", tr("Demote (Alt+Shift+Right)")],
+    ["Alt+Shift+Up", tr("Move Up (Alt+Shift+Up)")], ["Alt+Shift+Down", tr("Move Down (Alt+Shift+Down)")],
+    ["Alt+Shift+Plus", tr("Expand (Alt+Shift+Plus)")], ["Alt+Shift+Minus", tr("Collapse (Alt+Shift+Minus)")],
+    ["Alt+Shift+A", tr("All Levels")], ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`Alt+Shift+${n}`, tr(`Level ${n}`)])])
     taken.push({ keys, name });
   return taken;
 }
@@ -2429,6 +2469,7 @@ host?.addEventListener("message", async (e) => {
   post({ type: "log", text: "cross-references: " + (await crossRefChecks()) });
   post({ type: "log", text: "copy styles: " + (await copyStylesChecks()) });
   post({ type: "log", text: "navigation pane: " + (await navChecks()) });
+  post({ type: "log", text: "outline view: " + (await outlineChecks()) });
       post({ type: "log", text: "ruler: " + (await rulerChecks()) });
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
