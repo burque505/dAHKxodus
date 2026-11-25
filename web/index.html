@@ -2234,6 +2234,10 @@ const savedView = {
   marks: viewParams.has("marks") ? viewParams.get("marks") === "1" : null,
   ruler: viewParams.has("ruler") ? viewParams.get("ruler") === "1" : null,
   nav: viewParams.has("nav") ? viewParams.get("nav") === "1" : null,
+  // (the Styles pane, its filter and Show Preview)
+  styles: viewParams.has("styles") ? viewParams.get("styles") === "1" : null,
+  stylesFilter: ["recommended", "inuse", "all"].includes(viewParams.get("stylesfilter")) ? viewParams.get("stylesfilter") : null,
+  stylesPreview: viewParams.has("stylespreview") ? viewParams.get("stylespreview") === "1" : null,
 };
 function viewState() {
   return {
@@ -2244,6 +2248,9 @@ function viewState() {
     marks: ribbon.control("showmarks")?.getAttribute("aria-pressed") === "true",
     ruler: !!ribbon.control("showruler")?.checked,
     nav: !!ribbon.control("shownav")?.checked,
+    styles: !!ribbon.control("showstyles")?.checked,
+    stylesFilter: document.querySelector('#app [data-sp="filter"]')?.value ?? null,
+    stylesPreview: !!document.querySelector('#app [data-sp="preview"]')?.checked,
   };
 }
 function setChecked(name, on) {
@@ -2301,6 +2308,8 @@ function applyView(v) {
   setChecked("showrail", v.rail);
   setChecked("showruler", v.ruler);
   setChecked("shownav", v.nav);
+  ribbon.setStylesPaneSettings?.(v.stylesFilter ?? undefined, v.stylesPreview ?? undefined);
+  setChecked("showstyles", v.styles);
   if (v.marks != null) ribbon.setShowFormattingMarks(v.marks);    // (Show/Hide ¶)
   if (!ribbon.editor) return;
   if (v.paginated != null && !!ribbon.control("paginated")?.checked !== v.paginated)

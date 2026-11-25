@@ -245,9 +245,9 @@ class MainForm : Form {
         query.Add("user=" + Uri.EscapeDataString(user));
         if (initials != "") query.Add("initials=" + Uri.EscapeDataString(initials));
         // The view the last window closed with: page or continuous, zoom, comments, the rail, Show/Hide ¶, the ruler, the
-        // Navigation Pane (not for a measure run).
+        // Navigation Pane, the Styles pane with its filter and Show Preview (not for a measure run).
         if (measureOut == "")
-            foreach (var key in new[] { "Paginated", "Zoom", "Comments", "Rail", "Marks", "Ruler", "Nav" }) {
+            foreach (var key in new[] { "Paginated", "Zoom", "Comments", "Rail", "Marks", "Ruler", "Nav", "Styles", "StylesFilter", "StylesPreview" }) {
                 var value = Settings.Get("View", key);
                 if (value != "") query.Add(key.ToLowerInvariant() + "=" + Uri.EscapeDataString(value));
             }
@@ -843,8 +843,12 @@ class MainForm : Form {
                         ["Marks"] = Str("marks") is "True" or "true" ? "1" : "0",
                         ["Ruler"] = Str("ruler") is "True" or "true" ? "1" : "0",
                         ["Nav"] = Str("nav") is "True" or "true" ? "1" : "0",
+                        ["Styles"] = Str("styles") is "True" or "true" ? "1" : "0",
+                        ["StylesFilter"] = Str("stylesFilter") is "recommended" or "inuse" or "all" ? Str("stylesFilter") : "",
+                        ["StylesPreview"] = Str("stylesPreview") is "True" or "true" ? "1" : "0",
                     };
                     if (view["Zoom"] == "") view.Remove("Zoom");
+                    if (view["StylesFilter"] == "") view.Remove("StylesFilter");
                     break;
                 case "dirty":
                     dirty = Str("dirty") == "True" || Str("dirty") == "true";
