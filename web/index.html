@@ -2395,6 +2395,7 @@ host?.addEventListener("message", async (e) => {
       // The computer's fonts (the host lists them): in the Font box and the Font and style dialogs.
       ribbon.setSystemFonts?.(m.names ?? []);
       ribbon.setRecentFonts?.(m.recent ?? []);
+      ribbon.setCaptionLabels?.(m.captionLabels ?? []);
     } else if (m.type === "ui") {
       Object.assign(ui, m);
       relabel();
@@ -2568,6 +2569,8 @@ ribbon = mountRibbon("#app", {
   // Find's options (the find bar's Options menu): the host keeps them ([Find] Options) for every window.
   onFindOptionsChange: (options) => post({ type: "findOptions", options: Object.keys(options).join(",") }),
   onRecentFontsChange: (names) => post({ type: "recentFonts", names }),
+  // Insert Caption's own labels (New Label): the host keeps them ([Captions] Labels).
+  onCaptionLabelsChange: (labels) => post({ type: "captionLabels", labels }),
   // Paste: Word's clipboard HTML names its pictures as files in the temporary folder, which the page cannot read; the
   // host reads them (EngineHost.ReadPastedImage). Pictures on the web the page fetches itself.
   resolvePasteImage: async (src) => {

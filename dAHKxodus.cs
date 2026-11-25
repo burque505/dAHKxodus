@@ -380,13 +380,16 @@ class MainForm : Form {
 
     // The fonts installed on this computer, for the ribbon's Font box and the Font and style dialogs (a page cannot
     // list them itself), read once, by the first window; and the recently used ones ([Fonts] Recent, newest first,
-    // kept by "recentFonts"), listed first. A measure run starts with none.
+    // kept by "recentFonts"), listed first. A measure run starts with none. The caption labels the user made
+    // ([Captions] Labels, kept by "captionLabels") ride along.
     static string[]? installedFonts;
     void SendFonts() {
         installedFonts ??= new System.Drawing.Text.InstalledFontCollection().Families.Select(f => f.Name).ToArray();
         var recent = measureOut != "" ? Array.Empty<string>()
             : Settings.Get("Fonts", "Recent").Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        Send(new { type = "fonts", names = installedFonts, recent });
+        var captionLabels = measureOut != "" ? Array.Empty<string>()
+            : Settings.Get("Captions", "Labels").Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Send(new { type = "fonts", names = installedFonts, recent, captionLabels });
     }
 
     // The labels the page adds to the ribbon, in the user's language.
@@ -885,6 +888,12 @@ class MainForm : Form {
                     if (measureOut != "") { Log("recent fonts (measure run, not kept): " + Str("names")); break; }
                     if (m.TryGetProperty("names", out var names) && names.ValueKind == JsonValueKind.Array)
                         Settings.Set("Fonts", "Recent", string.Join("|", names.EnumerateArray().Select(n => n.GetString() ?? "")
+                            .Where(n => n != "" && !n.Contains('|'))));
+                    break;
+                case "captionLabels":  // Insert Caption's New Label / Delete Label: [Captions] Labels, for the next window and start
+                    if (measureOut != "") { Log("caption labels (measure run, not kept): " + Str("labels")); break; }
+                    if (m.TryGetProperty("labels", out var labels) && labels.ValueKind == JsonValueKind.Array)
+                        Settings.Set("Captions", "Labels", string.Join("|", labels.EnumerateArray().Select(n => n.GetString() ?? "")
                             .Where(n => n != "" && !n.Contains('|'))));
                     break;
                 case "findOptions":    // the find bar's Options: [Find] Options, for every window
