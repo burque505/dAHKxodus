@@ -7,12 +7,21 @@ using DocumentFormat.OpenXml.Packaging;
 
 static class Settings { public static string Get(string section, string key, string fallback = "") => fallback; }
 static class MainForm { public static void Log(string text) => Console.WriteLine("  log: " + text); }
+static class Lang { public static string T(string key, params object[] args) => key; }
 
 static class Program {
     static int failed, passed;
     static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
     static int Main(string[] args) {
+        if (args.Length > 0 && args[0] == "--data") {
+            // dotnet run -c Release -- --data file [table]: a data source's tables, columns and first rows
+            Console.WriteLine("tables: " + string.Join(" | ", MergeData.Tables(args[1])));
+            var t = MergeData.Load(args[1], args.Length > 2 ? args[2] : "");
+            Console.WriteLine($"{t.Name}: {t.Columns.Count} columns, {t.Rows.Count} rows\n  " + string.Join(" | ", t.Columns));
+            foreach (var r in t.Rows.Take(3)) Console.WriteLine("  " + string.Join(" | ", r.Select(v => v.Replace("\n", "\\n"))));
+            return 0;
+        }
         if (args.Length > 0) return ScanFiles(args);
 
         // ---- MERGEFIELD and its switches
@@ -128,8 +137,110 @@ static class Program {
             Check("settings: w:mailMerge removed", w.MainDocumentPart!.DocumentSettingsPart!.Settings!.OuterXml.Contains("mailMerge") == false, "");
         }
 
+        DataChecks();
+
         Console.WriteLine($"\n{passed} passed, {failed} failed");
         return failed == 0 ? 0 : 1;
+    }
+
+    // ---- Data sources (host\MergeData.cs)
+    static void DataChecks() {
+        var dir = Path.Combine(Path.GetTempPath(), "dAHKxodus-merge-checks");
+        Directory.CreateDirectory(dir);
+
+        // CSV: quotes with separators, "" and a line break; a blank line; Excel's Windows-1252
+        var csv = Path.Combine(dir, "people.csv");
+        File.WriteAllBytes(csv, System.Text.Encoding.Latin1.GetBytes("Name,Street,Note\r\n\"Peña, Ann\",\"1 Main St\nSuite 2\",\"said \"\"hi\"\"\"\r\n\r\nBob,2 Elm,\r\n"));
+        var t = MergeData.Load(csv);
+        Check("csv: columns and rows", t.Columns.SequenceEqual(new[] { "Name", "Street", "Note" }) && t.Rows.Count == 2, string.Join("|", t.Columns) + " / " + t.Rows.Count);
+        Check("csv: quoted separator, line break, quote, 1252", t.Rows.Count > 0 && t.Rows[0][0] == "Peña, Ann" && t.Rows[0][1] == "1 Main St\nSuite 2" && t.Rows[0][2] == "said \"hi\"",
+            t.Rows.Count > 0 ? string.Join("|", t.Rows[0]) : "");
+        var semi = MergeData.Text("A;B\n1,5;x\n", "s");
+        Check("csv: semicolons", semi.Columns.Count == 2 && semi.Rows[0][0] == "1,5", string.Join("|", semi.Columns));
+        var pasted = MergeData.Text("First Name\tLast\tFirst Name\nAnn\tSmith\tX", "pasted");
+        Check("pasted: tabs, a repeated column renamed", pasted.Columns.SequenceEqual(new[] { "First Name", "Last", "First Name 2" }) && pasted.Row(0)["Last"] == "Smith", string.Join("|", pasted.Columns));
+
+        // JSON: wrapped array, nested object, booleans, numbers, null
+        var json = MergeData.Json("{\"count\":2,\"loans\":[{\"Bo\":{\"Full\":\"Ann\"},\"IsGuar\":true,\"Rate\":6.5},{\"Bo\":{\"Full\":\"Bob\"},\"IsGuar\":false,\"Extra\":null}]}", "j");
+        Check("json: columns from all objects, nested a.b", json.Columns.SequenceEqual(new[] { "Bo.Full", "IsGuar", "Rate", "Extra" }), string.Join("|", json.Columns));
+        Check("json: values", json.Row(0)["Bo.Full"] == "Ann" && json.Row(0)["IsGuar"] == "True" && json.Row(0)["Rate"] == "6.5" && json.Row(1)["Rate"] == "", string.Join("|", json.Rows[0]));
+
+        // Excel: shared strings, inline string, booleans, a date, a gap in the columns, two sheets
+        var xlsx = Path.Combine(dir, "book.xlsx");
+        MakeXlsx(xlsx);
+        Check("xlsx: sheets", MergeData.Tables(xlsx).SequenceEqual(new[] { "Loans", "Other" }), string.Join("|", MergeData.Tables(xlsx)));
+        var x = MergeData.Load(xlsx, "Loans");
+        Check("xlsx: columns (a gap: Column 3)", x.Columns.SequenceEqual(new[] { "Name", "Amount", "Column 3", "Due", "Guar" }), string.Join("|", x.Columns));
+        var due = new DateTime(2026, 11, 25).ToString("d", System.Globalization.CultureInfo.CurrentCulture);
+        Check("xlsx: values", x.Rows.Count == 1 && x.Row(0)["Name"] == "Ann" && x.Row(0)["Amount"] == "1234.5" && x.Row(0)["Due"] == due && x.Row(0)["Guar"] == "True",
+            x.Rows.Count > 0 ? string.Join("|", x.Rows[0]) : "no rows");
+        Check("xlsx: the other sheet", MergeData.Load(xlsx, "Other").Row(0)["Z"] == "inline", "");
+
+        // A merge from a row: names matched ignoring case and spaces
+        var doc = Make(P(Field(" MERGEFIELD BoFull "), R(" owes "), Field(" MERGEFIELD Amount \\# $#,##0.00 ")));
+        var row = x.Row(0);
+        var values = Merge.Scan(doc).ToDictionary(f => f.Name, f => row.FirstOrDefault(kv => MergeData.Key(kv.Key) == MergeData.Key(f.Name == "BoFull" ? "Name" : f.Name)).Value ?? "");
+        Check("row merge: values from a row", Text(Merge.Fill(doc, values)) == "Ann owes $1,234.50", Text(Merge.Fill(doc, values)));
+        // All rows in one document (as the host does it: DocumentBuilder, each row's sections kept)
+        {
+            var letter = Make(P(R("Dear "), Field(" MERGEFIELD Name ")), P(R("Body")));
+            var rows = new[] { "Ann", "Bob", "Cy" }.Select((n, i) => new Docxodus.Source(new Docxodus.WmlDocument($"row{i}.docx", Merge.Fill(letter, V(("Name", n)))), true)).ToList();
+            var all = Docxodus.DocumentBuilder.BuildDocument(rows).DocumentByteArray;
+            var text = Text(all);
+            Check("one document: every row, in order", text.Contains("Dear Ann") && text.IndexOf("Dear Bob") > text.IndexOf("Dear Ann") && text.IndexOf("Dear Cy") > text.IndexOf("Dear Bob"), text);
+            Check("one document: a section per row (each starts a page)", Count(all, "sectPr") == 3 && FieldCount(all) == 0, Count(all, "sectPr").ToString());
+        }
+        Check("key: case, spaces, _ - . ignored", MergeData.Key("Bo Full") == MergeData.Key("bo_full") && MergeData.Key("Bo.Full") == "bofull", "");
+
+        // Access: a database made here through ADOX (only where the Access Database Engine is)
+        if (!MergeData.AccessAvailable) { Console.WriteLine("skip   access: no Access Database Engine on this computer"); return; }
+        var accdb = Path.Combine(dir, "loans.accdb");
+        try {
+            File.Delete(accdb);
+            MakeAccdb(accdb);
+            var tables = MergeData.Tables(accdb);
+            Check("access: tables and queries", tables.SequenceEqual(new[] { "Loans", "qGuaranteed" }), string.Join("|", tables));
+            var a = MergeData.Load(accdb, "Loans");
+            Check("access: columns", a.Columns.SequenceEqual(new[] { "ID", "BoFull", "Principal", "IsGuar", "Signed" }), string.Join("|", a.Columns));
+            var signed = new DateTime(2026, 11, 25).ToString("d", System.Globalization.CultureInfo.CurrentCulture);
+            Check("access: values (Yes/No as True/False, a date, a currency)", a.Rows.Count == 2 && a.Row(0)["BoFull"] == "Ann" && a.Row(0)["Principal"] == "125000" && a.Row(0)["IsGuar"] == "True" && a.Row(0)["Signed"] == signed && a.Row(1)["IsGuar"] == "False",
+                a.Rows.Count > 0 ? string.Join("|", a.Rows[0]) : "no rows");
+            var q = MergeData.Load(accdb, "qGuaranteed");
+            Check("access: a saved query", q.Rows.Count == 1 && q.Row(0)["BoFull"] == "Ann", q.Rows.Count.ToString());
+        } catch (Exception ex) {
+            Check("access", false, ex.ToString());
+        }
+    }
+
+    static void MakeXlsx(string path) {
+        using var doc = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
+        var book = doc.AddWorkbookPart();
+        void Xml(OpenXmlPart part, string xml) { using var s = part.GetStream(FileMode.Create); using var w = new StreamWriter(s); w.Write(xml); }
+        const string ns = "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
+        var s1 = book.AddNewPart<WorksheetPart>();
+        var s2 = book.AddNewPart<WorksheetPart>();
+        Xml(book, $"<workbook {ns}><sheets><sheet name=\"Loans\" sheetId=\"1\" r:id=\"{book.GetIdOfPart(s1)}\"/><sheet name=\"Other\" sheetId=\"2\" r:id=\"{book.GetIdOfPart(s2)}\"/></sheets></workbook>");
+        Xml(book.AddNewPart<SharedStringTablePart>(), $"<sst {ns}><si><t>Name</t></si><si><t>Amount</t></si><si><t>Due</t></si><si><t>Guar</t></si><si><t>Ann</t></si></sst>");
+        Xml(book.AddNewPart<WorkbookStylesPart>(), $"<styleSheet {ns}><cellXfs count=\"2\"><xf numFmtId=\"0\"/><xf numFmtId=\"14\" applyNumberFormat=\"1\"/></cellXfs></styleSheet>");
+        Xml(s1, $"<worksheet {ns}><sheetData>" +
+            "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c><c r=\"D1\" t=\"s\"><v>2</v></c><c r=\"E1\" t=\"s\"><v>3</v></c></row>" +
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\"><v>1234.5</v></c><c r=\"D2\" s=\"1\"><v>46351</v></c><c r=\"E2\" t=\"b\"><v>1</v></c></row>" +
+            "<row r=\"4\"></row></sheetData></worksheet>");
+        Xml(s2, $"<worksheet {ns}><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Z</t></is></c></row><row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>inline</t></is></c></row></sheetData></worksheet>");
+    }
+
+    static void MakeAccdb(string path) {
+        var catalog = Activator.CreateInstance(Type.GetTypeFromProgID("ADOX.Catalog")!)!;
+        var provider = Type.GetTypeFromProgID("Microsoft.ACE.OLEDB.16.0") != null ? "Microsoft.ACE.OLEDB.16.0" : "Microsoft.ACE.OLEDB.12.0";
+        var conn = catalog.GetType().InvokeMember("Create", System.Reflection.BindingFlags.InvokeMethod, null, catalog, [$"Provider={provider};Data Source={path};"])!;
+        void Exec(string sql) => conn.GetType().InvokeMember("Execute", System.Reflection.BindingFlags.InvokeMethod, null, conn, [sql]);
+        Exec("CREATE TABLE Loans (ID COUNTER PRIMARY KEY, BoFull TEXT(100), Principal CURRENCY, IsGuar YESNO, Signed DATETIME)");
+        Exec("INSERT INTO Loans (BoFull, Principal, IsGuar, Signed) VALUES ('Ann', 125000, True, #2026-11-25#)");
+        Exec("INSERT INTO Loans (BoFull, Principal, IsGuar, Signed) VALUES ('Bob', 5000.5, False, NULL)");
+        Exec("CREATE VIEW qGuaranteed AS SELECT * FROM Loans WHERE IsGuar = True");
+        conn.GetType().InvokeMember("Close", System.Reflection.BindingFlags.InvokeMethod, null, conn, null);
+        System.Runtime.InteropServices.Marshal.FinalReleaseComObject(conn);
+        System.Runtime.InteropServices.Marshal.FinalReleaseComObject(catalog);
     }
 
     // ---- Other templates: dotnet run -c Release -- a.dotx b.docx ...

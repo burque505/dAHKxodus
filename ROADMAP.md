@@ -37,8 +37,9 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
 - [ ] **8. Formats and parts:** left over from 7: a Styles pane (every style, with Modify, New and Update to Match),
   Insert Caption and a table of figures (captions numbered by fields that Update Table renumbers); RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
   Word or Pandoc); opening those formats; templates and snippets; mail merge (done: a template's or document's
-  fields filled from the Mail Merge dialog, saved records or a script, as one new document; next: recipient lists
-  from CSV, Excel or JSON, with preview and merging all, one or a range of rows; later: inserting merge fields,
+  fields filled from the Mail Merge dialog, saved records or a script; data sources from CSV, Excel, JSON, Access or
+  a pasted list, a row at a time in the dialog, merged as one document, all rows in one, or a Word file or PDF per
+  row; later: inserting merge fields,
   Address Block, Greeting Line, envelopes and labels)
 - [ ] **9. Spanish:** the whole program, the ribbon included
 - [ ] **10. Text boxes:** editing in them, then inserting and moving them

@@ -13,6 +13,7 @@
 #load "host\SettingsDialog.cs"
 #load "host\Templates.cs"
 #load "host\Merge.cs"
+#load "host\MergeData.cs"
 #load "host\MergeDialog.cs"
 #load "host\Recovery.cs"
 #load "host\Formats.cs"
@@ -500,8 +501,9 @@ class MainForm : Form {
         else if (asNew && askMerge && !quiet && measureOut == "" && Merge.Scan(bytes) is { Count: > 0 } fields) {
             // (the dialog runs its own loop: not inside the page's message)
             BeginInvoke(() => {
-                var filled = AskMerge(bytes, fields, Path.GetFileNameWithoutExtension(path), fromTemplate: true);
-                Deliver(filled ?? bytes);
+                var filled = AskMerge(bytes, fields, Path.GetFileNameWithoutExtension(path), fromTemplate: true, out var written);
+                if (written) StartBlank();    // (files written: this window starts blank)
+                else Deliver(filled ?? bytes);
             });
             return true;
         }
@@ -527,20 +529,100 @@ class MainForm : Form {
     // opens as a new document, without asking again, and then deletes.
     static readonly HashSet<string> MergedFiles = new(StringComparer.OrdinalIgnoreCase);
 
-    // The dialog: the filled document, or null when the user chose not to merge.
-    byte[]? AskMerge(byte[] bytes, List<MergeFieldInfo> fields, string name, bool fromTemplate) {
+    // The dialog: the document to open (the values typed or the row shown; all rows in one document), or null when
+    // the user chose not to merge or the merge went to files (written: true; PDFs go on being written after).
+    byte[]? AskMerge(byte[] bytes, List<MergeFieldInfo> fields, string name, bool fromTemplate, out bool written) {
+        written = false;
         asking = true;
         try {
-            using var dlg = new MergeDialog(name, fields, fromTemplate);
+            using var dlg = new MergeDialog(name, fields, fromTemplate, Path.GetFileNameWithoutExtension(name));
             if (dlg.ShowDialog(this) != DialogResult.OK) { Log($"merge: {name} not merged"); return null; }
-            var filled = Merge.Fill(bytes, dlg.Values);
-            Log($"merge: {name}, {fields.Count} field(s) filled");
-            return filled;
+            switch (dlg.Output) {
+                case MergeOutput.CurrentRow:
+                    Log($"merge: {name}, {fields.Count} field(s) filled");
+                    return Merge.Fill(bytes, dlg.Values);
+                case MergeOutput.OneDocument: {
+                    var clock = Stopwatch.StartNew();
+                    var sources = dlg.Rows.Select((v, i) => new Docxodus.Source(new Docxodus.WmlDocument($"row{i + 1}.docx", Merge.Fill(bytes, v)), true)).ToList();
+                    var all = Docxodus.DocumentBuilder.BuildDocument(sources).DocumentByteArray;
+                    Log($"merge: {name}, {dlg.Rows.Count} rows in one document ({all.Length:N0} bytes, {clock.ElapsedMilliseconds} ms)");
+                    return all;
+                }
+                default: {
+                    var pdf = dlg.Output == MergeOutput.PdfPerRow;
+                    using var pick = new FolderBrowserDialog {
+                        Description = Lang.T("mergeData.folderTitle"), UseDescriptionForTitle = true,
+                        InitialDirectory = Settings.Get("Merge", "OutputFolder", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)),
+                    };
+                    if (pick.ShowDialog(this) != DialogResult.OK) return null;
+                    Settings.Set("Merge", "OutputFolder", pick.SelectedPath);
+                    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var items = dlg.Rows.Select((v, i) => (values: v, path: MergedFileName(pick.SelectedPath, dlg.FilePattern, Path.GetFileNameWithoutExtension(name), v, i + 1, pdf ? ".pdf" : ".docx", names))).ToList();
+                    written = true;
+                    if (pdf) { _ = WriteMergedPdfsAsync(bytes, items, pick.SelectedPath); return null; }
+                    foreach (var (values, path) in items) File.WriteAllBytes(path, Merge.Fill(bytes, values));
+                    Log($"merge: {name}, {items.Count} file(s) written to {pick.SelectedPath}");
+                    SendStatus(Lang.T("mergeData.written", items.Count, pick.SelectedPath));
+                    OpenFolder(pick.SelectedPath);
+                    return null;
+                }
+            }
         } catch (Exception ex) {
             Log("merge failed: " + ex);
             MessageBox.Show(this, Lang.T("merge.failed", ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return null;
         } finally { asking = false; }
+    }
+
+    // A merged file's path: the pattern's {Field} as the row's value (names compared as MergeData.Key does), {#} the
+    // row's number; the template's name and the number when there is no pattern. Characters a file name can't have
+    // become _, and a name used already (in this merge or in the folder) gets " (2)", " (3)"...
+    static string MergedFileName(string folder, string pattern, string template, Dictionary<string, string> values, int number, string ext, HashSet<string> used) {
+        if (pattern == "") pattern = template + " {#}";
+        var name = System.Text.RegularExpressions.Regex.Replace(pattern, @"\{([^{}]+)\}", m => {
+            var key = m.Groups[1].Value.Trim();
+            if (key == "#") return number.ToString();
+            return values.FirstOrDefault(kv => MergeData.Key(kv.Key) == MergeData.Key(key)).Value ?? "";
+        });
+        name = string.Concat(name.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch)).Trim().TrimEnd('.');
+        if (name == "") name = $"{template} {number}";
+        if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) name = name[..^ext.Length];
+        var path = Path.Combine(folder, name + ext);
+        for (var n = 2; used.Contains(path) || File.Exists(path); n++) path = Path.Combine(folder, $"{name} ({n}){ext}");
+        used.Add(path);
+        return path;
+    }
+
+    static void OpenFolder(string folder) {
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "\"" + folder + "\"") { UseShellExecute = true }); }
+        catch (Exception ex) { Log("merge folder: " + ex.Message); }
+    }
+
+    // A PDF per row: a window of its own opens each merged document and writes its pages (the page's PDF export),
+    // then closes; this window's status bar counts.
+    async Task WriteMergedPdfsAsync(byte[] bytes, List<(Dictionary<string, string> values, string path)> items, string folder) {
+        var w = OpenWindow("", this);
+        var done = 0;
+        try {
+            await w.firstDocument.Task;
+            foreach (var (values, path) in items) {
+                var temp = Path.Combine(Path.GetTempPath(), $"dAHKxodus-merge-{Guid.NewGuid():N}.docx");
+                File.WriteAllBytes(temp, Merge.Fill(bytes, values));
+                MergedFiles.Add(temp);
+                if (!await w.WaitForDocument(() => w.OpenFile(temp, quiet: true, asNew: true))) { Log("merge pdf: could not open row " + (done + 1)); break; }
+                if (!await w.ExportPdfAsync(path, quiet: true)) { Log("merge pdf: FAILED " + path); break; }
+                done++;
+                SendStatus(Lang.T("mergeData.pdfProgress", done, items.Count));
+            }
+        } catch (Exception ex) {
+            Log("merge pdf failed: " + ex);
+        } finally {
+            if (!w.IsDisposed) { w.closeConfirmed = true; w.Close(); }
+        }
+        Log($"merge: {done} of {items.Count} PDF(s) written to {folder}");
+        SendStatus(Lang.T("mergeData.written", done, folder));
+        if (done < items.Count) MessageBox.Show(this, Lang.T("mergeData.pdfStopped", done, items.Count), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        if (done > 0) OpenFolder(folder);
     }
 
     // File > Mail Merge...: this document's fields filled, as a new untitled document (this one stays as it is).
@@ -553,7 +635,7 @@ class MainForm : Form {
             MessageBox.Show(this, Lang.T("merge.none"), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        var filled = AskMerge(bytes, fields, DocName, fromTemplate: false);
+        var filled = AskMerge(bytes, fields, DocName, fromTemplate: false, out _);
         if (filled == null) return;
         OpenMerged(filled);
     }
@@ -1532,8 +1614,10 @@ class MainForm : Form {
                 if (mergeValues != null) filled = Merge.Fill(bytes, mergeValues);
                 else {
                     var done = new TaskCompletionSource<byte[]?>();
-                    BeginInvoke(() => done.SetResult(AskMerge(bytes, fields, DocName, fromTemplate: false)));
+                    var written = false;
+                    BeginInvoke(() => done.SetResult(AskMerge(bytes, fields, DocName, fromTemplate: false, out written)));
                     filled = await done.Task;
+                    if (written) return Ok(true);    // (to files: this window's document stays)
                     if (filled == null) return Ok(false);
                 }
                 // (this window's document becomes the merged one, untitled: the script goes on with it)
