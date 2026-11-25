@@ -1,5 +1,5 @@
 // The Settings dialog (the ribbon's Settings button, Ctrl+,): the user's name and initials, the language, the recent
-// list's length, opening the last document at the start, and how often a recovery copy is saved. OK writes them to
+// list's length, opening the last document at the start, the template new documents start from, and how often a recovery copy is saved. OK writes them to
 // settings.ini in one go; MainForm then applies them to the open window. Loaded by dAHKxodus.cs (#load).
 using System.Diagnostics;
 using System.Drawing;
@@ -11,6 +11,8 @@ public sealed class SettingsDialog : Form {
     readonly NumericUpDown recent = new() { Minimum = 0, Maximum = 30, Width = 70 };
     readonly NumericUpDown autosave = new() { Minimum = 0, Maximum = 120, Width = 70 };
     readonly CheckBox openLast = new() { AutoSize = true };
+    readonly ComboBox newFrom = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
+    readonly List<string> newFromNames = new();    // ("" = a blank document; else a file name in Templates.Folder)
     readonly List<string> codes = new();
 
     public SettingsDialog() {
@@ -43,6 +45,10 @@ public sealed class SettingsDialog : Form {
         autosave.Value = Math.Clamp(Settings.GetInt("General", "AutosaveMinutes", 10), 0, 120);
         openLast.Text = Lang.T("settings.openLast");
         openLast.Checked = Settings.GetBool("General", "OpenLastAtStart", false);
+        newFrom.Items.Add(Lang.T("settings.newBlank"));
+        newFromNames.Add("");
+        foreach (var t in Templates.List()) { newFrom.Items.Add(Path.GetFileNameWithoutExtension(t)); newFromNames.Add(Path.GetFileName(t)); }
+        newFrom.SelectedIndex = Math.Max(0, newFromNames.FindIndex(n => string.Equals(n, Settings.Get("General", "NewFrom"), StringComparison.OrdinalIgnoreCase)));
 
         var grid = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
         void Heading(string text) {
@@ -69,6 +75,7 @@ public sealed class SettingsDialog : Form {
         Row(Lang.T("settings.language"), language);
         Row(Lang.T("settings.recent"), recent);
         Row(Lang.T("settings.autosave"), autosave);
+        Row(Lang.T("settings.newFrom"), newFrom);
         Whole(openLast);
 
         var folder = new LinkLabel { Text = Lang.T("settings.folder"), AutoSize = true, Anchor = AnchorStyles.Left };
@@ -106,6 +113,7 @@ public sealed class SettingsDialog : Form {
             Settings.Set("General", "RecentMax", ((int)recent.Value).ToString());
             Settings.Set("General", "AutosaveMinutes", ((int)autosave.Value).ToString());
             Settings.Set("General", "OpenLastAtStart", openLast.Checked ? "1" : "0");
+            Settings.Set("General", "NewFrom", newFromNames[Math.Max(0, newFrom.SelectedIndex)]);
         });
         RecentFiles.Trim();
     }

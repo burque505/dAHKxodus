@@ -11,6 +11,7 @@
 #load "host\Settings.cs"
 #load "host\Lang.cs"
 #load "host\SettingsDialog.cs"
+#load "host\Templates.cs"
 #load "host\Recovery.cs"
 #load "host\Formats.cs"
 #load "host\MacroHotkeys.cs"
@@ -127,6 +128,11 @@ class MainForm : Form {
     bool dirty;
     bool closeConfirmed;    // the user has answered the ask-to-save question; the next Close goes through
     bool asking;            // a question or a file dialog is up: another request waits its turn
+    // Templates (host\Templates.cs): a template this window starts a new document from once its page is ready; a start
+    // file that is a template to edit (File > Open, Recent) rather than to start a new document from; the next Save As
+    // being Save as Template; a new document from a macro-enabled template (untitled.docm).
+    string startTemplate = "";
+    bool editTemplate, templateSave, newMacro;
     // Saves the host asked the page for (the page answers "saved" with the id): Save or Save As, and who waits.
     readonly Dictionary<int, (bool saveAs, string? target, TaskCompletionSource<bool> done)> pendingSaves = new();
     int nextSave;
@@ -264,7 +270,7 @@ class MainForm : Form {
 
     void Send(object message) => web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
 
-    string DocName => current == "" ? Untitled : Path.GetFileName(current);
+    string DocName => current == "" ? (newMacro ? Path.ChangeExtension(Untitled, ".docm") : Untitled) : Path.GetFileName(current);
 
     // "*report.docx - dAHKxodus": the star while the document has changes not saved.
     void UpdateTitle() => Text = (Changed ? "*" : "") + DocName + " - dAHKxodus";
@@ -399,6 +405,8 @@ class MainForm : Form {
         close = Lang.T("page.close"), closeTip = Lang.T("page.closeTip"), hint = Lang.T("page.hint"),
         print = Lang.T("page.print"), printTip = Lang.T("page.printTip"), pdf = Lang.T("page.pdf"), pdfTip = Lang.T("page.pdfTip"),
         copy = Lang.T("page.copy"), copyTip = Lang.T("page.copyTip"),
+        newTemplate = Lang.T("page.newTemplate"), newTemplateTip = Lang.T("page.newTemplateTip"),
+        saveTemplate = Lang.T("page.saveTemplate"), saveTemplateTip = Lang.T("page.saveTemplateTip"),
         palette = Lang.T("page.palette"), paletteTip = Lang.T("page.paletteTip"), palettePlaceholder = Lang.T("page.palettePlaceholder"),
         paletteOn = Lang.T("page.paletteOn"), paletteNotNow = Lang.T("page.paletteNotNow"), paletteFile = Lang.T("page.paletteFile"),
         paletteMacro = Lang.T("page.paletteMacro"), paletteTitleBar = Lang.T("page.paletteTitleBar"),
@@ -468,36 +476,63 @@ class MainForm : Form {
 
     // ---- Opening
 
-    // False when the file can't be read (the user is told, unless quiet); else the page is opening it.
-    bool OpenFile(string path, bool quiet = false) {
+    // False when the file can't be read (the user is told, unless quiet); else the page is opening it. asNew: the file
+    // is a template (or a document used as one) to start a new, untitled document from; the file itself stays as it is.
+    // A template opened to edit comes to the page as a document too, and goes back to a template when saved (WriteDocument).
+    bool OpenFile(string path, bool quiet = false, bool asNew = false) {
         byte[] bytes;
         try {
             bytes = File.ReadAllBytes(path);
         } catch (Exception ex) {
             Log($"open {path} failed: {ex.Message}");
             if (measureOut == "" && !quiet) MessageBox.Show(this, Lang.T("file.openFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            if (ex is FileNotFoundException or DirectoryNotFoundException) { RecentFiles.Remove(path); Everywhere(w => w.SendRecent()); }
+            if (!asNew && ex is FileNotFoundException or DirectoryNotFoundException) { RecentFiles.Remove(path); Everywhere(w => w.SendRecent()); }
             return false;
         }
-        current = Path.GetFullPath(path);
+        if (asNew || Templates.IsTemplate(path)) bytes = Templates.ToDocument(bytes);
+        current = asNew ? "" : Path.GetFullPath(path);
+        newMacro = asNew && Path.GetExtension(path).ToLowerInvariant() is ".dotm" or ".docm";
+        if (asNew) newRequested = true;    // (the page's "opened" then runs the NewDocument hook, as for a blank one)
         dirty = recovered = false;
         ClearRecovery();    // (the document before it went as the user chose)
         UpdateTitle();
-        if (measureOut == "") { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
-        Log($"open {Path.GetFileName(path)} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
-        Send(new { type = "open", name = Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
+        if (measureOut == "" && !asNew) { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
+        Log($"open {Path.GetFileName(path)}{(asNew ? " as a new document" : "")} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
+        Send(new { type = "open", name = asNew ? DocName : Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
         return true;
     }
 
-    // New (Ctrl+N, File > New): a new window, as in Word, unless this one holds only an untouched new document.
+    // New (Ctrl+N, File > New): a new window, as in Word, unless this one holds only an untouched new document. It
+    // starts from the template in Settings ("New documents start from"), if one is set and still there.
     void NewDocument() {
-        if (Untouched) StartBlank();
+        if (Templates.Default is { } template) NewFromTemplate(template);
+        else if (Untouched) StartBlank();
         else OpenWindow("", this);
+    }
+
+    // File > New from Template..., a template opened from Explorer or dropped, New with a template in Settings: a new
+    // untitled document from it, here if this window holds only an untouched new document, else in a new window.
+    void NewFromTemplate(string path) {
+        if (Untouched) { if (!OpenFile(path, asNew: true)) StartBlank(); }
+        else OpenWindow("", this, template: path);
+    }
+
+    void ChooseTemplate() {
+        if (asking) return;
+        string? chosen;
+        asking = true;
+        try {
+            using var dlg = new TemplateDialog();
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            chosen = dlg.Chosen;
+        } finally { asking = false; }
+        if (chosen != null) NewFromTemplate(chosen);
     }
 
     void StartBlank() {
         newRequested = true;    // (the page's blankOpened then runs the NewDocument hook)
         current = "";
+        newMacro = false;
         dirty = recovered = false;
         ClearRecovery();
         UpdateTitle();
@@ -516,17 +551,20 @@ class MainForm : Form {
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
             path = dlg.FileName;
         } finally { asking = false; }
-        OpenPath(path);
+        OpenPath(path, editTemplate: true);
     }
 
     // Open (the dialog, Recent, a file dropped or handed over): the window that has it already comes to the front;
-    // else it opens here if this window holds only an untouched new document, and in a new window if not.
-    void OpenPath(string path) {
+    // else it opens here if this window holds only an untouched new document, and in a new window if not. A template
+    // (.dotx, .dotm) starts a new document, as a double-click on one does in Word, unless it is opened to be edited
+    // (editTemplate: File > Open, Recent).
+    void OpenPath(string path, bool editTemplate = false) {
         var full = Path.GetFullPath(path);
+        if (Templates.IsTemplate(full) && !editTemplate) { NewFromTemplate(full); return; }
         var open = Windows.FirstOrDefault(w => string.Equals(w.current, full, StringComparison.OrdinalIgnoreCase));
         if (open != null) { open.BringForward(); return; }
         if (Untouched) OpenFile(full);
-        else OpenWindow(full, this);
+        else OpenWindow(full, this, editTemplate: true);
     }
 
     // Only a new document nobody has typed in yet: New and Open use this window instead of opening another.
@@ -534,11 +572,12 @@ class MainForm : Form {
 
     // ---- Several windows
 
-    /// A new window with the file (or a new document: ""), cascaded from the one it came from.
-    static MainForm OpenWindow(string file, MainForm? from) {
-        var window = new MainForm(Ahk, from?.dir ?? AppFolders.ProgramFolder, file, "", from);
+    /// A new window with the file (or a new document: "", from a template if one is given), cascaded from the one it
+    /// came from. editTemplate: a template file is opened to be edited, not to start a new document from.
+    static MainForm OpenWindow(string file, MainForm? from, string template = "", bool editTemplate = false) {
+        var window = new MainForm(Ahk, from?.dir ?? AppFolders.ProgramFolder, file, "", from) { startTemplate = template, editTemplate = editTemplate };
         window.Show();
-        Log($"new window ({Windows.Count} open): " + (file == "" ? "(a new document)" : Path.GetFileName(file)));
+        Log($"new window ({Windows.Count} open): " + (file != "" ? Path.GetFileName(file) : template != "" ? $"(a new document from {Path.GetFileName(template)})" : "(a new document)"));
         return window;
     }
 
@@ -635,17 +674,26 @@ class MainForm : Form {
         if (target != null) path = target;
         else if (measureOut != "") path = Path.ChangeExtension(measureOut, ".host.docx");
         else if (saveAs || path == "") {
+            // Save as Template: the template types only, in the templates folder, the macros kept as they are.
+            var asTemplate = templateSave;
+            templateSave = false;
+            var macros = DocName.EndsWith(".docm", StringComparison.OrdinalIgnoreCase) || DocName.EndsWith(".dotm", StringComparison.OrdinalIgnoreCase);
             asking = true;
             try {
                 using var dlg = new SaveFileDialog {
-                    Filter = Lang.T("file.filterSave"), FileName = DocName, OverwritePrompt = true, AddExtension = true,
-                    FilterIndex = DocName.EndsWith(".docm", StringComparison.OrdinalIgnoreCase) ? 2 : 1,
-                    InitialDirectory = current != "" ? Path.GetDirectoryName(current) : "",
+                    Filter = Lang.T(asTemplate ? "file.filterTemplate" : "file.filterSave"), OverwritePrompt = true, AddExtension = true,
+                    FileName = asTemplate ? Path.GetFileNameWithoutExtension(DocName) : DocName,
+                    FilterIndex = asTemplate ? (macros ? 2 : 1)
+                        : Path.GetExtension(DocName).ToLowerInvariant() switch { ".docm" => 2, ".dotx" => 3, ".dotm" => 4, _ => 1 },
+                    InitialDirectory = asTemplate ? Templates.Folder : current != "" ? Path.GetDirectoryName(current) : "",
                 };
+                if (asTemplate) Directory.CreateDirectory(Templates.Folder);
                 if (dlg.ShowDialog(this) != DialogResult.OK) return false;
                 path = dlg.FileName;
             } finally { asking = false; }
         }
+        // (a template under .dotx/.dotm, a document under any other name: the page's bytes are always a document's)
+        bytes = Templates.ForPath(bytes, path);
         try {
             WriteAtomically(path, bytes);
         } catch (Exception ex) {
@@ -666,6 +714,25 @@ class MainForm : Form {
         ReportModified();
         _ = RunHookAsync(HookEvent.Saved, current);
         return true;
+    }
+
+    // (measure runs) The host's saved copy as a template and back: each package's type, and the text kept.
+    static string MeasureTemplates(string docx) {
+        try {
+            var bytes = File.ReadAllBytes(docx);
+            string TypeOf(byte[] b) {
+                using var ms = new MemoryStream(b);
+                using var d = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(ms, false);
+                return d.DocumentType + ":" + (d.MainDocumentPart?.Document?.Body?.InnerText.Length ?? -1);
+            }
+            var asTemplate = Templates.ForPath(bytes, "x.dotx");
+            var back = Templates.ToDocument(asTemplate);
+            var again = Templates.ForPath(bytes, "x.docx");
+            string a = TypeOf(bytes), t = TypeOf(asTemplate), d = TypeOf(back);
+            var ok = a.StartsWith("Document:") && t.StartsWith("Template:") && d.StartsWith("Document:")
+                && a.Split(':')[1] == t.Split(':')[1] && t.Split(':')[1] == d.Split(':')[1] && ReferenceEquals(again, bytes);
+            return $"{(ok ? "ok" : "FAILED")} ({a} -> {t} -> {d})";
+        } catch (Exception ex) { return "FAILED: " + ex.Message; }
     }
 
     // The new file is written beside the old one and then takes its place, so a failure part-way (a full disk, a
@@ -753,11 +820,17 @@ class MainForm : Form {
                     // Started without a document: the last one, if the user wants that (and it is still there).
                     if (firstWindow && current == "" && measureOut == "" && Settings.GetBool("General", "OpenLastAtStart", false))
                         current = RecentFiles.List().FirstOrDefault(File.Exists) ?? "";
+                    // A template handed over (the command line, a second start) starts a new document from it.
+                    if (current != "" && Templates.IsTemplate(current) && !editTemplate) { startTemplate = current; current = ""; }
                     if (current != "") OpenFile(current);
+                    else if (startTemplate != "" && OpenFile(startTemplate, asNew: true)) { }
+                    // (a start without a document: the template in Settings, if one is set; no NewDocument hook, as
+                    // for the blank one)
+                    else if (measureOut == "" && Templates.Default is { } template && OpenFile(template, quiet: true, asNew: true)) newRequested = false;
                     else Send(new { type = "blank", name = Untitled });
                     break;
                 case "opened":
-                    newRequested = false;
+                    if (newRequested) { newRequested = false; _ = RunHookAsync(HookEvent.NewDocument, ""); }
                     Log($"opened {clock.ElapsedMilliseconds} ms (window {Environment.GetEnvironmentVariable("DAHKXODUS_WINDOW") ?? "default"}; open {Str("open")} ms: first window after {Str("firstWindow")} ms, longest frozen {Str("longestGap")} ms; first paint {Str("paint")} ms, {Str("blocks")} blocks)");
                     if (recovering != null) RecoveredOpen();
                     if (measureOut != "" && !measureStarted) { measureStarted = true; Send(new { type = "measure" }); }
@@ -868,6 +941,13 @@ class MainForm : Form {
                 case "saveAsRequest":
                     _ = SaveAsync(saveAs: true);
                     break;
+                case "fileMenu":    // the host's own File menu commands that have no message of their own
+                    switch (Str("id")) {
+                        case "newTemplate": BeginInvoke(ChooseTemplate); break;    // (the dialog runs its own loop)
+                        case "saveTemplate": templateSave = true; _ = SaveAsync(saveAs: true); break;
+                        default: Log("file menu: unknown command " + Str("id")); break;
+                    }
+                    break;
                 case "saveRequest":    // Save (Ctrl+S, the ribbon's) while a BeforeSave hook is set: the hook, then the save
                     _ = SaveAsync(saveAs: false);
                     break;
@@ -921,12 +1001,14 @@ class MainForm : Form {
                     if (measureOut != "") _ = MeasureHooks();
                     break;
                 case "measureSave":    // the measure run's check of the host's own save (SaveAsync)
-                    _ = SaveAsync(saveAs: false).ContinueWith(t => Log($"measure: host save {(t.Result ? "written" : "FAILED")}, title \"{Text}\""),
-                        TaskScheduler.FromCurrentSynchronizationContext());
+                    _ = SaveAsync(saveAs: false).ContinueWith(t => {
+                        Log($"measure: host save {(t.Result ? "written" : "FAILED")}, title \"{Text}\"");
+                        Log("measure: templates " + MeasureTemplates(Path.ChangeExtension(measureOut, ".host.docx")));
+                    }, TaskScheduler.FromCurrentSynchronizationContext());
                     break;
                 case "drop":    // files dropped on the page (postMessageWithAdditionalObjects): open the first document
                     var dropped = e.AdditionalObjects?.OfType<CoreWebView2File>().Select(f => f.Path)
-                        .FirstOrDefault(p => p.EndsWith(".docx", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".docm", StringComparison.OrdinalIgnoreCase));
+                        .FirstOrDefault(p => Path.GetExtension(p).ToLowerInvariant() is ".docx" or ".docm" or ".dotx" or ".dotm");
                     if (dropped != null) { Activate(); OpenPath(dropped); }
                     break;
                 case "ahk":    // a Bridge function in dAHKxodus.ahk; its answer comes later (WndProc: ahkResult)
@@ -1252,8 +1334,8 @@ class MainForm : Form {
 
     // The program's own commands, as the page lists the editor's (name, group, description, arguments in order).
     static readonly (string name, string group, string description, string[] args, string? returns)[] HostCommands = [
-        ("new", "file", "Start a new document (asks to save the one open first, if it has changes).", [], "true, or false when the user cancelled"),
-        ("open", "file", "Open a .docx (asks to save the one open first, if it has changes).", ["path"], "true, or false when it could not be opened or the user cancelled"),
+        ("new", "file", "Start a new document (asks to save the one open first, if it has changes): blank, or from template (a .dotx, .dotm or .docx; a name alone is looked for in the templates folder). Settings' template is not used: a script's new document is blank unless it names one.", ["template?"], "true, or false when the template could not be opened or the user cancelled"),
+        ("open", "file", "Open a .docx (asks to save the one open first, if it has changes). A template (.dotx, .dotm) opens to be edited.", ["path"], "true, or false when it could not be opened or the user cancelled"),
         ("save", "file", "Save the document: to its file (asking where if it has none), or to path.", ["path?"], "true once written, false when not"),
         ("exportPdf", "file", "Write the document's pages as a PDF.", ["path"], "true once written"),
         ("saveCopy", "file", "Write a copy in another format, by path's extension: .html (a web page), .md (Markdown) or .txt (plain text). The document stays as it is.", ["path"], "true once written"),
@@ -1332,8 +1414,15 @@ class MainForm : Form {
                 return Ok(list);
             case "new":
                 NotAsking();
+                var template = OptArg("template") ?? "";
+                if (template != "" && !Path.IsPathRooted(template)) {
+                    // (a name alone: the templates folder's file of that name, .dotx first)
+                    template = new[] { "", ".dotx", ".dotm", ".docx" }.Select(ext => Path.Combine(Templates.Folder, template + ext))
+                        .FirstOrDefault(File.Exists) ?? Path.Combine(Templates.Folder, template);
+                }
+                if (template != "" && !File.Exists(template)) throw new ScriptError("refused", $"new: there is no template {template}");
                 if (!await CanDiscard(hooks: false)) return Ok(false);
-                return Ok(await WaitForDocument(() => { StartBlank(); return true; }));
+                return Ok(await WaitForDocument(() => { if (template == "") { StartBlank(); return true; } return OpenFile(template, quiet: true, asNew: true); }));
             case "open":
                 NotAsking();
                 var path = Arg("path");
