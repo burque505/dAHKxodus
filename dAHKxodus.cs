@@ -12,6 +12,8 @@
 #load "host\Lang.cs"
 #load "host\SettingsDialog.cs"
 #load "host\Templates.cs"
+#load "host\Merge.cs"
+#load "host\MergeDialog.cs"
 #load "host\Recovery.cs"
 #load "host\Formats.cs"
 #load "host\MacroHotkeys.cs"
@@ -406,6 +408,7 @@ class MainForm : Form {
         print = Lang.T("page.print"), printTip = Lang.T("page.printTip"), pdf = Lang.T("page.pdf"), pdfTip = Lang.T("page.pdfTip"),
         copy = Lang.T("page.copy"), copyTip = Lang.T("page.copyTip"),
         newTemplate = Lang.T("page.newTemplate"), newTemplateTip = Lang.T("page.newTemplateTip"),
+        merge = Lang.T("page.merge"), mergeTip = Lang.T("page.mergeTip"),
         saveTemplate = Lang.T("page.saveTemplate"), saveTemplateTip = Lang.T("page.saveTemplateTip"),
         palette = Lang.T("page.palette"), paletteTip = Lang.T("page.paletteTip"), palettePlaceholder = Lang.T("page.palettePlaceholder"),
         paletteOn = Lang.T("page.paletteOn"), paletteNotNow = Lang.T("page.paletteNotNow"), paletteFile = Lang.T("page.paletteFile"),
@@ -479,10 +482,13 @@ class MainForm : Form {
     // False when the file can't be read (the user is told, unless quiet); else the page is opening it. asNew: the file
     // is a template (or a document used as one) to start a new, untitled document from; the file itself stays as it is.
     // A template opened to edit comes to the page as a document too, and goes back to a template when saved (WriteDocument).
-    bool OpenFile(string path, bool quiet = false, bool asNew = false) {
+    // A new document from a template with fields to fill (host\Merge.cs) asks for their values first, unless quiet (the
+    // dialog: "Without merging" keeps the fields); values given (a script's): filled with those, no dialog.
+    bool OpenFile(string path, bool quiet = false, bool asNew = false, Dictionary<string, string>? values = null, bool askMerge = true) {
         byte[] bytes;
         try {
             bytes = File.ReadAllBytes(path);
+            if (MergedFiles.Remove(path)) { askMerge = false; try { File.Delete(path); } catch (IOException) { } }
         } catch (Exception ex) {
             Log($"open {path} failed: {ex.Message}");
             if (measureOut == "" && !quiet) MessageBox.Show(this, Lang.T("file.openFailed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -490,16 +496,74 @@ class MainForm : Form {
             return false;
         }
         if (asNew || Templates.IsTemplate(path)) bytes = Templates.ToDocument(bytes);
-        current = asNew ? "" : Path.GetFullPath(path);
-        newMacro = asNew && Path.GetExtension(path).ToLowerInvariant() is ".dotm" or ".docm";
-        if (asNew) newRequested = true;    // (the page's "opened" then runs the NewDocument hook, as for a blank one)
-        dirty = recovered = false;
-        ClearRecovery();    // (the document before it went as the user chose)
-        UpdateTitle();
-        if (measureOut == "" && !asNew) { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
-        Log($"open {Path.GetFileName(path)}{(asNew ? " as a new document" : "")} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
-        Send(new { type = "open", name = asNew ? DocName : Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
+        if (asNew && values != null) bytes = Merge.Fill(bytes, values);
+        else if (asNew && askMerge && !quiet && measureOut == "" && Merge.Scan(bytes) is { Count: > 0 } fields) {
+            // (the dialog runs its own loop: not inside the page's message)
+            BeginInvoke(() => {
+                var filled = AskMerge(bytes, fields, Path.GetFileNameWithoutExtension(path), fromTemplate: true);
+                Deliver(filled ?? bytes);
+            });
+            return true;
+        }
+        Deliver(bytes);
         return true;
+
+        void Deliver(byte[] bytes) {
+            current = asNew ? "" : Path.GetFullPath(path);
+            newMacro = asNew && Path.GetExtension(path).ToLowerInvariant() is ".dotm" or ".docm";
+            if (asNew) newRequested = true;    // (the page's "opened" then runs the NewDocument hook, as for a blank one)
+            dirty = recovered = false;
+            ClearRecovery();    // (the document before it went as the user chose)
+            UpdateTitle();
+            if (measureOut == "" && !asNew) { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
+            Log($"open {Path.GetFileName(path)}{(asNew ? " as a new document" : "")} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
+            Send(new { type = "open", name = asNew ? DocName : Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
+        }
+    }
+
+    // ---- Mail merge (host\Merge.cs, host\MergeDialog.cs)
+
+    // Merged documents on their way to a window (File > Mail Merge...): a file in the temp folder that the window
+    // opens as a new document, without asking again, and then deletes.
+    static readonly HashSet<string> MergedFiles = new(StringComparer.OrdinalIgnoreCase);
+
+    // The dialog: the filled document, or null when the user chose not to merge.
+    byte[]? AskMerge(byte[] bytes, List<MergeFieldInfo> fields, string name, bool fromTemplate) {
+        asking = true;
+        try {
+            using var dlg = new MergeDialog(name, fields, fromTemplate);
+            if (dlg.ShowDialog(this) != DialogResult.OK) { Log($"merge: {name} not merged"); return null; }
+            var filled = Merge.Fill(bytes, dlg.Values);
+            Log($"merge: {name}, {fields.Count} field(s) filled");
+            return filled;
+        } catch (Exception ex) {
+            Log("merge failed: " + ex);
+            MessageBox.Show(this, Lang.T("merge.failed", ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return null;
+        } finally { asking = false; }
+    }
+
+    // File > Mail Merge...: this document's fields filled, as a new untitled document (this one stays as it is).
+    async void MailMerge() {
+        if (asking) return;
+        var bytes = await SnapshotAsync();
+        if (bytes == null) return;
+        var fields = Merge.Scan(bytes);
+        if (fields.Count == 0) {
+            MessageBox.Show(this, Lang.T("merge.none"), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var filled = AskMerge(bytes, fields, DocName, fromTemplate: false);
+        if (filled == null) return;
+        OpenMerged(filled);
+    }
+
+    // A merged document in a new window (or this one, if it holds only an untouched new document).
+    void OpenMerged(byte[] filled) {
+        var temp = Path.Combine(Path.GetTempPath(), $"dAHKxodus-merge-{Guid.NewGuid():N}.docx");
+        File.WriteAllBytes(temp, filled);
+        MergedFiles.Add(temp);
+        NewFromTemplate(temp);
     }
 
     // New (Ctrl+N, File > New): a new window, as in Word, unless this one holds only an untouched new document. It
@@ -945,6 +1009,7 @@ class MainForm : Form {
                     switch (Str("id")) {
                         case "newTemplate": BeginInvoke(ChooseTemplate); break;    // (the dialog runs its own loop)
                         case "saveTemplate": templateSave = true; _ = SaveAsync(saveAs: true); break;
+                        case "merge": BeginInvoke(MailMerge); break;
                         default: Log("file menu: unknown command " + Str("id")); break;
                     }
                     break;
@@ -1334,7 +1399,9 @@ class MainForm : Form {
 
     // The program's own commands, as the page lists the editor's (name, group, description, arguments in order).
     static readonly (string name, string group, string description, string[] args, string? returns)[] HostCommands = [
-        ("new", "file", "Start a new document (asks to save the one open first, if it has changes): blank, or from template (a .dotx, .dotm or .docx; a name alone is looked for in the templates folder). Settings' template is not used: a script's new document is blank unless it names one.", ["template?"], "true, or false when the template could not be opened or the user cancelled"),
+        ("new", "file", "Start a new document (asks to save the one open first, if it has changes): blank, or from template (a .dotx, .dotm or .docx; a name alone is looked for in the templates folder). Settings' template is not used: a script's new document is blank unless it names one. The template's merge fields are filled from values (an object, field name: text, True/False for yes/no fields; or a saved record's name); without it they stay, and no dialog is shown.", ["template?", "values?"], "true, or false when the template could not be opened or the user cancelled"),
+        ("merge", "file", "Mail merge: the document's fields filled, and the filled document becomes this window's, untitled. From values (an object, field name: text, True/False for yes/no fields; or a saved record's name); without it, the Mail Merge dialog asks.", ["values?"], "true, or false when the document has no fields or the user cancelled"),
+        ("mergeFields", "query", "The document's merge fields: an array of {name, kind (merge, fillin, ask, placeholder, control), label, default, yesNo}.", [], "array"),
         ("open", "file", "Open a .docx (asks to save the one open first, if it has changes). A template (.dotx, .dotm) opens to be edited.", ["path"], "true, or false when it could not be opened or the user cancelled"),
         ("save", "file", "Save the document: to its file (asking where if it has none), or to path.", ["path?"], "true once written, false when not"),
         ("exportPdf", "file", "Write the document's pages as a PDF.", ["path"], "true once written"),
@@ -1379,6 +1446,30 @@ class MainForm : Form {
 
     static JsonObject Ok(JsonNode? value) => new() { ["result"] = value };
 
+    // A script's merge values: "values", an object (field name: text) or a saved record's name. Null when not given.
+    static Dictionary<string, string>? MergeValues(string name, JsonObject args) {
+        Dictionary<string, string>? values = null;
+        var given = args["values"] switch {
+            JsonObject o => o,
+            JsonValue v when v.TryGetValue<string>(out var s) && s.Trim().StartsWith('{') =>
+                JsonNode.Parse(s) as JsonObject ?? throw new ScriptError("bad_arguments", $"{name}: \"values\" must be an object or a record's name"),
+            JsonValue v when v.TryGetValue<string>(out var record) && record.Trim() != "" =>
+                (values = MergeRecords.Load(record.Trim())) != null ? null
+                    : throw new ScriptError("refused", $"{name}: there is no record \"{record}\" in {MergeRecords.Folder}"),
+            null => null,
+            JsonValue v when v.TryGetValue<string>(out _) => null,
+            _ => throw new ScriptError("bad_arguments", $"{name}: \"values\" must be an object or a record's name"),
+        };
+        if (given != null) {
+            values ??= new(StringComparer.OrdinalIgnoreCase);
+            foreach (var (k, v) in given)
+                values[k] = v is JsonValue jv && jv.TryGetValue<string>(out var s) ? s
+                    : v is JsonValue b && b.TryGetValue<bool>(out var flag) ? (flag ? "True" : "False")
+                    : v?.ToJsonString() ?? "";
+        }
+        return values;
+    }
+
     async Task<JsonObject> ScriptCommandAsync(IntPtr caller, string name, JsonObject args) {
         string Arg(string key) => args[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s
             : throw new ScriptError("bad_arguments", $"{name}: argument \"{key}\" must be a string");
@@ -1405,7 +1496,7 @@ class MainForm : Form {
                 foreach (var c in HostCommands) {
                     var info = new JsonObject {
                         ["name"] = c.name, ["group"] = c.group, ["description"] = c.description,
-                        ["args"] = new JsonObject(c.args.Select(a => KeyValuePair.Create(a, (JsonNode?)"string"))),
+                        ["args"] = new JsonObject(c.args.Select(a => KeyValuePair.Create(a, (JsonNode?)(a.StartsWith("values") ? "object or string" : "string")))),
                         ["order"] = new JsonArray(c.args.Select(a => (JsonNode?)a).ToArray()),
                     };
                     if (c.returns != null) info["returns"] = c.returns;
@@ -1421,8 +1512,37 @@ class MainForm : Form {
                         .FirstOrDefault(File.Exists) ?? Path.Combine(Templates.Folder, template);
                 }
                 if (template != "" && !File.Exists(template)) throw new ScriptError("refused", $"new: there is no template {template}");
+                var newValues = MergeValues(name, args);
                 if (!await CanDiscard(hooks: false)) return Ok(false);
-                return Ok(await WaitForDocument(() => { if (template == "") { StartBlank(); return true; } return OpenFile(template, quiet: true, asNew: true); }));
+                return Ok(await WaitForDocument(() => { if (template == "") { StartBlank(); return true; } return OpenFile(template, quiet: true, asNew: true, newValues, askMerge: false); }));
+            case "mergeFields": {
+                var bytes = await SnapshotAsync() ?? throw new ScriptError("error", "mergeFields: the document could not be read");
+                return Ok(new JsonArray(Merge.Scan(bytes).Select(f => (JsonNode?)new JsonObject {
+                    ["name"] = f.Name, ["kind"] = f.Kind.ToString().ToLowerInvariant(), ["label"] = f.Label,
+                    ["default"] = f.Default, ["yesNo"] = f.InCondition,
+                }).ToArray()));
+            }
+            case "merge": {
+                NotAsking();
+                var mergeValues = MergeValues(name, args);
+                var bytes = await SnapshotAsync() ?? throw new ScriptError("error", "merge: the document could not be read");
+                var fields = Merge.Scan(bytes);
+                if (fields.Count == 0) return Ok(false);
+                byte[]? filled;
+                if (mergeValues != null) filled = Merge.Fill(bytes, mergeValues);
+                else {
+                    var done = new TaskCompletionSource<byte[]?>();
+                    BeginInvoke(() => done.SetResult(AskMerge(bytes, fields, DocName, fromTemplate: false)));
+                    filled = await done.Task;
+                    if (filled == null) return Ok(false);
+                }
+                // (this window's document becomes the merged one, untitled: the script goes on with it)
+                if (!await CanDiscard(hooks: false)) return Ok(false);
+                var temp = Path.Combine(Path.GetTempPath(), $"dAHKxodus-merge-{Guid.NewGuid():N}.docx");
+                File.WriteAllBytes(temp, filled);
+                MergedFiles.Add(temp);
+                return Ok(await WaitForDocument(() => OpenFile(temp, quiet: true, asNew: true)));
+            }
             case "open":
                 NotAsking();
                 var path = Arg("path");

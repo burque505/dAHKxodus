@@ -1579,6 +1579,7 @@ window.addEventListener("afterprint", () => printDone());
 const hostFileMenu = () => [
   { id: "newTemplate", label: ui.newTemplate ?? "New from Template…", title: ui.newTemplateTip ?? "", separatorBefore: true },
   { id: "saveTemplate", label: ui.saveTemplate ?? "Save as Template…", title: ui.saveTemplateTip ?? "" },
+  { id: "merge", label: ui.merge ?? "Mail Merge…", title: ui.mergeTip ?? "" },
   { id: "print", label: ui.print ?? "Print…", title: ui.printTip ?? "", shortcut: "Ctrl+P", separatorBefore: true },
   { id: "pdf", label: ui.pdf ?? "Export to PDF…", title: ui.pdfTip ?? "" },
   { id: "copy", label: ui.copy ?? "Save a Copy As…", title: ui.copyTip ?? "" },

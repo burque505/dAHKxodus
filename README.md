@@ -49,6 +49,12 @@ The **File** menu (the File tab, or Alt+F) has New, Open, Save, Save As, the rec
 
 **File > Save a Copy As** writes a copy as a web page (.html, pictures included), Markdown (.md) or plain text (.txt, UTF-8). The window goes on with the .docx, which stays as it was: a copy never takes its place. Tracked changes are accepted in the copy and comments left out; Markdown has no pictures yet. Scripts: `Doc.SaveCopy(path)`, the format by the extension.
 
+### Mail merge
+
+A new document from a template with fields to fill (**File > New from Template**, or New with a template set in Settings) first shows the **Mail Merge** dialog: a box for each field, and a check box for a yes/no field that an IF tests. **Merge** fills them; **Without merging** keeps the fields. **File > Mail Merge…** does the same for the document that is open, as a new document (the open one stays as it is). The fields filled are Word's MERGEFIELD (with its `\* \b \f \# \@` switches), IF (its text may run over several paragraphs), `=` formulas, FILLIN, ASK and the REF fields showing its answer, content controls named by tag, title or the custom XML they are bound to, and typed placeholders `{{Name}}`, `{{Name|default}}` and `<<Name>>` (the markers: `[Merge] Markers` in settings.ini). Text that only looks like a merge field (`«Name»` typed or pasted as text) stays as it is, as in Word; a template with Jinja tags (`{% … %}`) is left for dAHKxodusPro. Word's data-source setting is removed from the new document, so Word doesn't ask for a data source.
+
+**Records** keep a set of values under a name (the Record box, Save): pick one to fill the boxes again. They are JSON files in `%APPDATA%\dAHKxodus\Records` (portable mode: `data\Records`); a script can write them too. Scripts: `Doc.MergeFields()` lists the fields, `Doc.Merge(values)` merges this window's document (values: a Map of field name to text, or a record's name; left out: the dialog asks), `Doc.New(template, values)` starts a merged document from a template without the dialog. Checks: `dotnet run -c Release` in `tests\merge`.
+
 ### Autosave and recovery
 
 While the document has changes not saved, dAHKxodus keeps a recovery copy of it: every 10 minutes (Settings changes this; 0 turns it off) and whenever you switch to another window. The copy is removed when you save the document, open or start another, or close it (saved, or with Don't Save). The document's own file is never written by autosave.
