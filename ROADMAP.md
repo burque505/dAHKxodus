@@ -41,7 +41,8 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   fields filled from the Mail Merge dialog, saved records or a script; data sources from CSV, Excel, JSON, Access or
   a pasted list, a row at a time in the dialog, merged as one document, all rows in one, or a Word file or PDF per
   row; later: inserting merge fields,
-  Address Block, Greeting Line, envelopes and labels)
+  Address Block, Greeting Line, envelopes and labels); table selection (done: cells, rows, columns and whole tables,
+  the ⊞ handle and Table Layout > Select)
 - [ ] **9. Spanish:** the whole program, the ribbon included
 - [ ] **10. Text boxes:** editing in them, then inserting and moving them
 - [ ] **11. Compare and find commands:** Review > Compare two versions of a document, the differences shown as

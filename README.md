@@ -61,6 +61,10 @@ A new document from a template with fields to fill (**File > New from Template**
 
 **Insert > Snippets** keeps pieces of documents to insert again: a letterhead, a clause, a signature block. Select it and choose **Save Selection as Snippet…**; the list then inserts it at the caret with its own formatting (as Keep Source Formatting pastes it). A snippet is an `.html` file in `%APPDATA%\dAHKxodus\Snippets` (portable mode: `data\Snippets`), a page of its own that opens in a browser too; an `.html` or `.txt` file you put there yourself is listed as well (a `.txt` one goes in as plain text, taking the formatting where it lands). Like a paste, a snippet brings text, paragraphs, lists, tables, links and pictures, not fields, footnotes, comments or tracked changes. **Manage Snippets…** inserts, renames (F2) and deletes them (to the Recycle Bin). A snippet can have a hotkey: the Macros tab's **Hotkeys…** lists the snippets after the macros. The command palette lists them as "Snippet: name". Scripts: `Doc.Snippets` lists them, `Doc.InsertSnippet(name)` inserts one, `Doc.SaveSnippet(name)` keeps the selection; `Doc.SelectedHtml` is the selection's HTML.
 
+### Table selection
+
+Select cells as in Word: drag across cells, Shift+click, or a selection that runs from a paragraph into a table. The **⊞** handle at a table's top-left corner (shown while the mouse is over the table or the caret is in it; a nested table has its own) selects the whole table, and **Table Layout > Select ▾** selects the cell, column, row or table at the caret. Selected cells are shaded; Copy brings a table of just those cells (tab-separated as plain text); Delete and typing clear them, Backspace and Cut remove whole rows or the whole table when all of it is selected, each one undo step.
+
 ### Autosave and recovery
 
 While the document has changes not saved, dAHKxodus keeps a recovery copy of it: every 10 minutes (Settings changes this; 0 turns it off) and whenever you switch to another window. The copy is removed when you save the document, open or start another, or close it (saved, or with Don't Save). The document's own file is never written by autosave.
