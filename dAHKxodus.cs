@@ -21,6 +21,7 @@
 #load "host\MacroDialog.cs"
 #load "host\Hooks.cs"
 #load "host\RibbonButtons.cs"
+#load "host\Snippets.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
 // args: [0] the AHK script's window (bridge calls go there as WM_COPYDATA), [1] the program folder,
@@ -172,6 +173,12 @@ class MainForm : Form {
         if (measureOut != "") EventHooks.Override = new(StringComparer.OrdinalIgnoreCase);
         // (and its ribbon button: one for the page's check)
         if (measureOut != "") RibbonButtons.Override = [new("Insert date.ahk", "Date")];
+        // (and its snippets: a folder of its own, emptied, and one hotkey for the page's check)
+        if (measureOut != "") {
+            Snippets.OverrideFolder = Path.Combine(dir, "logs", "measure-snippets");
+            if (firstWindow) try { if (Directory.Exists(Snippets.OverrideFolder)) Directory.Delete(Snippets.OverrideFolder, true); } catch (IOException) { }
+            Snippets.OverrideHotkeys = new(StringComparer.OrdinalIgnoreCase);
+        }
         autosaveTimer.Tick += (s, e) => _ = AutosaveAsync();
         // Leaving the window (another program, a dialog of its own excepted) is a moment to keep the copy current; not
         // more than twice a minute.
@@ -415,6 +422,9 @@ class MainForm : Form {
         paletteOn = Lang.T("page.paletteOn"), paletteNotNow = Lang.T("page.paletteNotNow"), paletteFile = Lang.T("page.paletteFile"),
         paletteMacro = Lang.T("page.paletteMacro"), paletteTitleBar = Lang.T("page.paletteTitleBar"),
         paletteStatusBar = Lang.T("page.paletteStatusBar"), paletteNone = Lang.T("page.paletteNone"),
+        snippets = Lang.T("page.snippets"), snippetsTip = Lang.T("page.snippetsTip"), snippetSave = Lang.T("page.snippetSave"),
+        snippetSaveTip = Lang.T("page.snippetSaveTip"), snippetManage = Lang.T("page.snippetManage"),
+        snippetManageTip = Lang.T("page.snippetManageTip"), snippetNone = Lang.T("page.snippetNone"), paletteSnippet = Lang.T("page.paletteSnippet"),
         record = Lang.T("page.record"), recordTip = Lang.T("page.recordTip"), recordStop = Lang.T("page.recordStop"),
         recording = Lang.T("page.recording"), nothingRecorded = Lang.T("page.nothingRecorded"),
         recordHeader = Lang.T("page.recordHeader"), recordMoved = Lang.T("page.recordMoved"), recordSkipped = Lang.T("page.recordSkipped"),
@@ -955,6 +965,7 @@ class MainForm : Form {
                     SendFonts();
                     if (measureOut == "") SendRecent();
                     SendMacros();    // (their hotkeys work from the start)
+                    SendSnippets();
                     SendHooks();
                     SendListDefaults();
                     SendHeadlineLists();
@@ -1179,6 +1190,24 @@ class MainForm : Form {
                 case "deleteMacro":    // the Macros list, right-click: one of the user's own macros, after asking
                     var doomed = Str("path");
                     BeginInvoke(() => DeleteMacro(doomed));
+                    break;
+                case "listSnippets":    // Insert > Snippets is opening: the folder may have changed
+                    SendSnippets();
+                    break;
+                case "insertSnippet":    // a snippet from that list, its hotkey or the palette
+                    var snippetFile = Str("file");
+                    _ = InsertSnippetAsync(snippetFile, Str("hotkey"));
+                    break;
+                case "saveSnippetRequest":    // Save Selection as Snippet...: the selection's HTML (the editor's copy of it)
+                    var snippetHtml = Str("html");
+                    var snippetText = Str("text");
+                    BeginInvoke(() => SaveSnippet(snippetHtml, snippetText));    // (the dialog runs its own loop)
+                    break;
+                case "manageSnippets":
+                    BeginInvoke(ManageSnippets);
+                    break;
+                case "measureSnippets":    // (measure runs) the page's selection kept as a snippet, and inserted back
+                    if (measureOut != "") _ = MeasureSnippets(Str("html"));
                     break;
                 case "openMacrosFolder":
                     try {
@@ -1499,6 +1528,9 @@ class MainForm : Form {
         ("name", "query", "The document's name, as the title bar shows it.", [], "string"),
         ("modified", "query", "Whether the document has changes not saved.", [], "true or false"),
         ("appVersion", "query", "dAHKxodus's version.", [], "string"),
+        ("snippets", "query", "The snippets (Insert > Snippets): an array of {name, file, kind (html or text), hotkey}.", [], "array"),
+        ("insertSnippet", "edit", "Insert a snippet at the caret, replacing the selection: its name (or file name) in the snippets folder. An HTML snippet keeps its own formatting; a text one takes the formatting where it lands.", ["name"], "true once inserted"),
+        ("saveSnippet", "edit", "Keep the selection as a snippet called name (one of that name is replaced).", ["name"], "true once saved, false with nothing selected"),
         ("hooks", "hooks", "The event hooks: an array of {event, macro, on}, one per event (macro \"\": none).", [], "array"),
         ("setHook", "hooks", "Give an event (Started, Opened, NewDocument, BeforeSave, Saved, PdfExported, Closing) a macro to run: a file name in the macros folders, or a full path; \"\" takes it away.", ["event", "macro"], null),
         ("setHookOn", "hooks", "Switch an event's hook on or off; its macro stays chosen.", ["event", "on"], null),
@@ -1685,6 +1717,26 @@ class MainForm : Form {
                     ? (double.TryParse(vz, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var zd) ? zd : vz)
                     : null;
                 return Ok(new JsonObject { ["paginated"] = paginated, ["zoom"] = zoom });
+            }
+            case "snippets":
+                var snippetKeys = Snippets.Hotkeys();
+                return Ok(new JsonArray(Snippets.List().Select(sn => (JsonNode?)new JsonObject {
+                    ["name"] = sn.Name, ["file"] = sn.File, ["kind"] = sn.Html ? "html" : "text", ["hotkey"] = snippetKeys.GetValueOrDefault(sn.File) ?? "",
+                }).ToArray()));
+            case "insertSnippet": {
+                NotAsking();
+                var sn = Snippets.Find(Arg("name")) ?? throw new ScriptError("refused", $"insertSnippet: there is no snippet \"{Arg("name")}\" in {Snippets.Folder}");
+                return Ok(await InsertSnippetAsync(sn.File));
+            }
+            case "saveSnippet": {
+                var snippetName = Arg("name").Trim();
+                if (!Snippets.ValidName(snippetName)) throw new ScriptError("bad_arguments", $"saveSnippet: \"{snippetName}\" can't be a file name");
+                var html = (await PageAwaitAsync("window.dax.exec(\"selectedHtml\")") as JsonObject)?["result"]?.ToString() ?? "";
+                if (html == "") return Ok(false);
+                var saved = Snippets.Save(snippetName, html);
+                Log("snippet saved: " + saved);
+                Everywhere(w => w.SendSnippets());
+                return Ok(true);
             }
             case "hooks":
                 var hookList = EventHooks.All();
@@ -1971,6 +2023,100 @@ class MainForm : Form {
         Send(new { type = "macros", entries, buttons });
     }
 
+    // ---- Snippets (host\Snippets.cs): Insert > Snippets lists them; the page sends the selection's HTML to keep, and
+    // the host reads a snippet back and pastes it (exec pasteHtml, Keep Source Formatting; a .txt one exec pasteText).
+
+    void SendSnippets() {
+        if (web.CoreWebView2 == null) return;
+        var hotkeys = Snippets.Hotkeys();
+        var entries = Snippets.List().Select(x => new { file = x.File, name = x.Name, html = x.Html, preview = x.Preview, hotkey = hotkeys.GetValueOrDefault(x.File) ?? "" }).ToArray();
+        Send(new { type = "snippets", entries });
+    }
+
+    // A snippet at the caret, replacing the selection: true once the editor took it.
+    async Task<bool> InsertSnippetAsync(string file, string hotkey = "") {
+        var snippet = Snippets.List().FirstOrDefault(x => x.File.Equals(file, StringComparison.OrdinalIgnoreCase));
+        if (snippet == null) {
+            SendStatus(Lang.T("snippets.notFound", Path.GetFileNameWithoutExtension(file)));
+            SendSnippets();
+            return false;
+        }
+        try {
+            var (html, content) = Snippets.Read(snippet);
+            Log("snippet: " + snippet.File + (hotkey != "" ? $" (hotkey {hotkey})" : ""));
+            var call = html
+                ? "window.dax.exec(\"pasteHtml\", " + JsonSerializer.Serialize(new { html = content, formatting = "keep" }) + ")"
+                : "window.dax.exec(\"pasteText\", " + JsonSerializer.Serialize(new { text = content }) + ")";
+            var answer = await PageAwaitAsync(call) as JsonObject;
+            if (answer?["result"] is JsonValue v && v.TryGetValue<bool>(out var done) && done) return true;
+            Log($"snippet {snippet.File} not inserted: {answer?["error"]?.ToString() ?? "the editor refused it"}");
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ScriptError or ArgumentException) {
+            Log($"snippet {snippet.File} not inserted: {ex.Message}");
+        }
+        SendStatus(Lang.T("snippets.notInserted", snippet.Name));
+        return false;
+    }
+
+    // Save Selection as Snippet...: its name asked, then kept.
+    void SaveSnippet(string html, string text) {
+        if (asking) return;
+        if (html == "") { SendStatus(Lang.T("snippets.noSelection")); return; }
+        string file;
+        asking = true;
+        try {
+            using var dlg = new SnippetNameDialog(text.Length > 200 ? text[..200] + "…" : text);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            try { file = Snippets.Save(dlg.SnippetName, html); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                MessageBox.Show(this, Lang.T("snippets.saveFailed", ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+        } finally { asking = false; }
+        Log($"snippet saved: {file} ({html.Length:N0} characters of HTML)");
+        SendStatus(Lang.T("snippets.saved", Path.GetFileNameWithoutExtension(file)));
+        Everywhere(w => w.SendSnippets());
+    }
+
+    // Manage Snippets...: insert, rename, delete; the list drawn again in every window after.
+    void ManageSnippets() {
+        if (asking) return;
+        Snippets.Entry? insert;
+        bool changed;
+        asking = true;
+        try {
+            using var dlg = new SnippetsDialog();
+            dlg.ShowDialog(this);
+            insert = dlg.ToInsert;
+            changed = dlg.Changed;
+        } finally { asking = false; }
+        if (changed) Everywhere(w => w.SendSnippets());
+        if (insert != null) _ = InsertSnippetAsync(insert.File);
+    }
+
+    // (Measure runs) The page's selection (its HTML) kept as a snippet in the run's own folder, a text snippet beside
+    // it; both inserted at the caret; then a rename takes the hotkey along. The page checks the document's text.
+    async Task MeasureSnippets(string html) {
+        var notes = new List<string>();
+        var ok = true;
+        void Check(string what, bool good) { notes.Add($"{what} {(good ? "ok" : "FAILED")}"); ok &= good; }
+        try {
+            var file = Snippets.Save("Measure", html);
+            File.WriteAllText(Path.Combine(Snippets.Folder, "Measure text.txt"), "plain line");
+            var list = Snippets.List();
+            Check("listed", list.Count == 2 && list[0].File == "Measure.html" && list[0].Html && !list[1].Html);
+            Check("read back", Snippets.Read(list[0]).Content == html);
+            Check("found by name", Snippets.Find("measure")?.File == "Measure.html" && Snippets.Find("Measure text")?.Html == false);
+            Check("html inserted", await InsertSnippetAsync(file));
+            Check("text inserted", await InsertSnippetAsync("Measure text.txt"));
+            Snippets.SetHotkey(file, "Ctrl+Alt+9");
+            var renamed = Snippets.Rename(list[0], "Measure 2");
+            Check("rename keeps the hotkey", Snippets.HotkeyOf(renamed) == "Ctrl+Alt+9" && Snippets.HotkeyOf(file) == "");
+            SendSnippets();
+        } catch (Exception ex) { notes.Add("FAILED: " + ex.Message); ok = false; }
+        Log("measure: snippets host " + string.Join(", ", notes));
+        Send(new { type = "measureReply", what = "snippets", ok });
+    }
+
     // The Macros tab's Ribbon buttons...: the user's own buttons, each a macro; OK keeps them.
     void ShowRibbonButtons() {
         if (asking || measureOut != "") return;
@@ -1991,15 +2137,23 @@ class MainForm : Form {
         if (asking || measureOut != "") return;
         asking = true;
         try {
-            var macros = Macros.List(dir).Select(x => (Path.GetFileName(x.path), x.label, x.user)).ToList();
-            using var dlg = new MacroHotkeysDialog(macros, MacroHotkeys.All(), taken);
+            // (the macros, then the snippets: one list, so a hotkey is never both a macro's and a snippet's)
+            var macros = Macros.List(dir).Select(x => (Path.GetFileName(x.path), x.label, Lang.T(x.user ? "hotkeys.mine" : "hotkeys.program"))).ToList();
+            var snippets = Snippets.List().Select(x => (Snippets.HotkeyPrefix + x.File, x.Name, Lang.T("hotkeys.snippet"))).ToList();
+            var all = MacroHotkeys.All();
+            foreach (var (file, keys) in Snippets.Hotkeys()) all[Snippets.HotkeyPrefix + file] = keys;
+            using var dlg = new MacroHotkeysDialog(macros.Concat(snippets), all, taken);
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
-            // (only the macros there are: a hotkey of one deleted or renamed meanwhile goes)
+            // (only the macros and snippets there are: a hotkey of one deleted or renamed meanwhile goes)
             var names = macros.Select(x => x.Item1).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var snippetNames = snippets.Select(x => x.Item1).ToHashSet(StringComparer.OrdinalIgnoreCase);
             MacroHotkeys.Save(dlg.Result.Where(p => names.Contains(p.Key)).ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase));
+            Snippets.SaveHotkeys(dlg.Result.Where(p => snippetNames.Contains(p.Key))
+                .ToDictionary(p => p.Key[Snippets.HotkeyPrefix.Length..], p => p.Value, StringComparer.OrdinalIgnoreCase));
             Log("macro hotkeys: " + string.Join(", ", MacroHotkeys.All().Select(p => $"{p.Key}={p.Value}")));
+            Log("snippet hotkeys: " + string.Join(", ", Snippets.Hotkeys().Select(p => $"{p.Key}={p.Value}")));
         } finally { asking = false; }
-        Everywhere(w => w.SendMacros());
+        Everywhere(w => { w.SendMacros(); w.SendSnippets(); });
     }
 
     // A macro of the user's (not one that came with the program), to the Recycle Bin once the user says yes.

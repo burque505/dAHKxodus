@@ -57,6 +57,10 @@ A new document from a template with fields to fill (**File > New from Template**
 
 **Records** keep a set of values under a name (the Record box, Save): pick one to fill the boxes again. They are JSON files in `%APPDATA%\dAHKxodus\Records` (portable mode: `data\Records`); a script can write them too. Scripts: `Doc.MergeFields()` lists the fields, `Doc.Merge(values)` merges this window's document (values: a Map of field name to text, or a record's name; left out: the dialog asks), `Doc.New(template, values)` starts a merged document from a template without the dialog. Checks: `dotnet run -c Release` in `tests\merge`.
 
+### Snippets
+
+**Insert > Snippets** keeps pieces of documents to insert again: a letterhead, a clause, a signature block. Select it and choose **Save Selection as Snippet…**; the list then inserts it at the caret with its own formatting (as Keep Source Formatting pastes it). A snippet is an `.html` file in `%APPDATA%\dAHKxodus\Snippets` (portable mode: `data\Snippets`), a page of its own that opens in a browser too; an `.html` or `.txt` file you put there yourself is listed as well (a `.txt` one goes in as plain text, taking the formatting where it lands). Like a paste, a snippet brings text, paragraphs, lists, tables, links and pictures, not fields, footnotes, comments or tracked changes. **Manage Snippets…** inserts, renames (F2) and deletes them (to the Recycle Bin). A snippet can have a hotkey: the Macros tab's **Hotkeys…** lists the snippets after the macros. The command palette lists them as "Snippet: name". Scripts: `Doc.Snippets` lists them, `Doc.InsertSnippet(name)` inserts one, `Doc.SaveSnippet(name)` keeps the selection; `Doc.SelectedHtml` is the selection's HTML.
+
 ### Autosave and recovery
 
 While the document has changes not saved, dAHKxodus keeps a recovery copy of it: every 10 minutes (Settings changes this; 0 turns it off) and whenever you switch to another window. The copy is removed when you save the document, open or start another, or close it (saved, or with Don't Save). The document's own file is never written by autosave.

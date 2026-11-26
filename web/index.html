@@ -1214,6 +1214,50 @@ async function userButtonChecks() {
   return out.join(", ");
 }
 
+// Snippets: "Hello world" with "world" bold, selected and kept (exec selectedHtml: the bold inline); the host saves it
+// in the run's own folder with a .txt snippet beside it and inserts both at the end (host\Snippets.cs, as the menu
+// does); the document's text then has both, the inserted "world" still bold; Insert > Snippets and the palette list
+// them (after the host's rename, as "Measure 2").
+async function snippetChecks() {
+  const out = [];
+  openInContinuousView();
+  ribbon.openBlank("snippets.docx");
+  caretAtStart(); relabel();
+  await frame();
+  await ribbon.exec("insertText", { text: "Hello world" });
+  await ribbon.exec("find", { text: "world", matchCase: true });
+  await ribbon.exec("bold");
+  await ribbon.exec("fontFamily", { name: "Courier New" });
+  await ribbon.exec("find", { text: "Hello world", matchCase: true });
+  const html = ribbon.exec("selectedHtml");
+  out.push(`kept ${/font-weight:\s*(700|bold)/.test(html) && !/(^|[^-])color:/.test(html) ? "ok" : `FAILED (${JSON.stringify(html.slice(0, 160))})`}`);
+  await ribbon.exec("moveCaret", { to: "documentEnd" });
+  const host = new Promise((resolve) => {
+    measureWaiters.set("snippets", resolve);
+    setTimeout(() => { if (measureWaiters.delete("snippets")) resolve(null); }, 30000);
+  });
+  post({ type: "measureSnippets", html });
+  out.push(`host ${(await host) ? "ok" : "FAILED (see measure: snippets host)"}`);
+  const text = ribbon.exec("text");
+  out.push(`inserted ${text === "Hello worldHello worldplain line" ? "ok" : `FAILED (${JSON.stringify(text)})`}`);
+  const bold = Array.from(document.querySelectorAll("#app [data-anchor] *"))
+    .filter((el) => el.childElementCount === 0 && el.textContent === "world" && Number(getComputedStyle(el).fontWeight) >= 700
+      && getComputedStyle(el).fontFamily.includes("Courier New")).length;
+  out.push(`formatting ${bold === 2 ? "ok" : `FAILED (${bold} bold Courier New "world")`}`);
+  const until = performance.now() + 5000;
+  while (performance.now() < until && !snippetFiles.some((x) => x.file === "Measure 2.html")) await frame();
+  ribbon.selectTab("insert");
+  document.querySelector(".dax-snippetbutton")?.click();
+  await frame();
+  const listed = Array.from(document.querySelectorAll(".dax-snippetmenu [data-snippet]")).map((b) => b.dataset.snippet);
+  document.querySelector(".dax-snippetbutton")?.click();
+  out.push(`menu ${listed.join("|") === "Measure 2.html|Measure text.txt" ? "ok" : `FAILED (${listed.join(" | ")})`}`);
+  const items = paletteItems();
+  out.push(`palette ${items.some((i) => i.key === "sn:Measure 2.html" && i.keys === "Ctrl+Alt+9") && items.some((i) => i.key === "sn-save") ? "ok" : "FAILED"}`);
+  ribbon.selectTab("home");
+  return out.join(", ");
+}
+
 // Event hooks: the host makes tests\hook-check.ahk the BeforeSave and Saved hooks (the measure run's own) and says so
 // (Save then goes through it); Save, as Ctrl+S does, runs BeforeSave (which types a mark at the end), saves, runs
 // Saved. The host checks the order and the saved file; here, the mark is in the document and Save is the page's again.
@@ -1499,6 +1543,10 @@ const ui = {
   myButtons: "My buttons", ribbonButtons: "Ribbon buttons…", ribbonButtonsTip: "Put your macros on the ribbon as buttons of their own, here in My buttons",
   buttonMissing: "(its macro, {0}, is not there)",
   hooks: "Event hooks…", hooksTip: "Macros that run by themselves when something happens: a document opened or saved, a PDF exported, the window closing",
+  snippets: "Snippets", snippetsTip: "Insert a piece of a document you kept: a letterhead, a clause, a signature block",
+  snippetSave: "Save Selection as Snippet…", snippetSaveTip: "Keep what is selected, with its formatting, to insert again from this list",
+  snippetManage: "Manage Snippets…", snippetManageTip: "Insert, rename or delete your snippets; open their folder",
+  snippetNone: "(no snippets yet)", paletteSnippet: "Snippet",
 };
 // The ribbon's text in the user's language: its own (lang\<code>.ribbon.json, from the host; {} is English), and the
 // help line under it, which the host gives whole (a sentence translated word by word would read badly). Again after
@@ -1636,20 +1684,22 @@ function chordOf(e) {
   return (e.ctrlKey ? "Ctrl+" : "") + (e.altKey ? "Alt+" : "") + (e.shiftKey ? "Shift+" : "") + name;
 }
 window.addEventListener("keydown", (e) => {
-  if (e.repeat || e.isComposing || palette || !macroFiles.some((m) => m.hotkey)) return;
+  if (e.repeat || e.isComposing || palette || (!macroFiles.some((m) => m.hotkey) && !snippetFiles.some((x) => x.hotkey))) return;
   const chord = chordOf(e);
   // (the same file name in both folders: the user's own, listed last)
   const m = chord ? macros().filter((x) => x.hotkey === chord).pop() : null;
-  if (!m) return;
+  // (a snippet's hotkey: Insert > Snippets, given in the same Hotkeys dialog)
+  const snippet = !m && chord ? snippetFiles.find((x) => x.hotkey === chord) : null;
+  if (!m && !snippet) return;
   e.preventDefault();
   e.stopImmediatePropagation();
-  runMacro(m, chord);
+  if (m) runMacro(m, chord); else insertSnippet(snippet, chord);
 }, true);
 // The keys dAHKxodus itself uses, named: the dialogs ask before a macro takes one. The ribbon's (their tooltips say
 // them, as the palette shows), and the ones the page and the editor take without a button saying so.
 function takenShortcuts() {
   const tr = (english) => ui.ribbon?.[english] ?? english;
-  const taken = paletteItems().filter((i) => i.keys && !i.key.startsWith("m:")).map((i) => ({ keys: i.keys, name: i.name }));
+  const taken = paletteItems().filter((i) => i.keys && !i.key.startsWith("m:") && !i.key.startsWith("sn:")).map((i) => ({ keys: i.keys, name: i.name }));
   for (const [keys, name] of [["Ctrl+Z", tr("Undo")], ["Ctrl+Y", tr("Redo")], ["Ctrl+A", "Select all"], ["Ctrl+C", "Copy"],
     ["Ctrl+X", "Cut"], ["Ctrl+V", "Paste"], ["Ctrl+S", tr("Save")], ["Ctrl+Shift+S", tr("Save As…")], ["F12", tr("Save As…")],
     ["Ctrl+N", tr("New")], ["Ctrl+O", tr("Open…")], ["Ctrl+P", ui.print ?? "Print…"], ["Ctrl+,", ui.settings],
@@ -1709,6 +1759,10 @@ function labelButtons() {
   renderUserButtons();
   const hooks = document.querySelector(".dax-hooksbutton");
   if (hooks) { hooks.textContent = ui.hooks; hooks.title = ui.hooksTip; }
+  const snippetLabel = document.querySelector(".dax-snippetgroup .dxr-glabel");
+  if (snippetLabel) snippetLabel.textContent = ui.snippets;
+  const snippetButton = document.querySelector(".dax-snippetbutton");
+  if (snippetButton) { snippetButton.textContent = ui.snippets + " \u25BE"; snippetButton.title = ui.snippetsTip; }
   showRecording();
   for (const b of document.querySelectorAll(".dax-palette-button, .dax-palettetab")) {
     b.title = ui.paletteTip;
@@ -1748,6 +1802,7 @@ function addAhkButton() {
   rec.addEventListener("click", toggleRecording);
   p.after(rec);
   addMacrosTab();
+  addSnippetsGroup();
   labelButtons();
 }
 
@@ -1845,6 +1900,87 @@ function addMacrosTab() {
     if (menu.hasAttribute("data-open")) { close(); return; }
     post({ type: "listMacros" });    // (the host answers "macros": the list is drawn again with what it found)
     renderMacroMenu();
+    const r = button.getBoundingClientRect();
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.setAttribute("data-open", "");
+    button.setAttribute("aria-expanded", "true");
+  });
+  document.addEventListener("mousedown", (e) => { if (!menu.contains(e.target) && e.target !== button) close(); }, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu.hasAttribute("data-open")) close(); }, true);
+}
+
+// --- Snippets (Insert > Snippets; the host keeps them, host\Snippets.cs): pieces of documents kept to insert again.
+// Save Selection as Snippet sends the host the editor's own copy of the selection (exec selectedHtml: its formatting
+// inline; the clipboard is left alone); a snippet chosen here, by its hotkey or in the palette, the host reads and
+// pastes back at the caret (Keep Source Formatting; a .txt snippet as plain text).
+let snippetFiles = [];
+let renderSnippetMenu = () => {};
+function insertSnippet(x, hotkey = "") {
+  post({ type: "insertSnippet", file: x.file, hotkey });
+}
+function saveSnippet() {
+  let html = "", text = "";
+  try { html = ribbon.exec("selectedHtml") ?? ""; text = ribbon.exec("selectedText") ?? ""; } catch { }
+  post({ type: "saveSnippetRequest", html, text });
+}
+function addSnippetsGroup() {
+  const root = document.querySelector("#app .dxr");
+  const insertPanel = root?.querySelector('.dxr-panel[data-panel="insert"]');
+  if (!insertPanel || insertPanel.querySelector(".dax-snippetgroup")) return;
+  const group = document.createElement("div");
+  group.className = "dxr-group dax-snippetgroup";
+  group.innerHTML = '<span class="dxr-glabel"></span><div class="dxr-row">'
+    + '<button type="button" class="dax-snippetbutton" aria-haspopup="menu" aria-expanded="false"></button></div>';
+  insertPanel.append(group);
+  const menu = document.createElement("div");
+  menu.className = "dxr-pop dxr-filemenu dax-snippetmenu";
+  menu.setAttribute("role", "menu");
+  root.appendChild(menu);
+  const button = group.querySelector(".dax-snippetbutton");
+  const close = () => { menu.removeAttribute("data-open"); button.setAttribute("aria-expanded", "false"); };
+  const item = (label, title, run) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    b.title = title ?? "";
+    b.innerHTML = "<span></span>";
+    b.firstChild.textContent = label;
+    b.addEventListener("mousedown", (e) => e.preventDefault());    // (keep the document's selection)
+    b.addEventListener("click", () => { close(); run(); });
+    return b;
+  };
+  const separator = () => {
+    const sep = document.createElement("div");
+    sep.className = "dxr-filesep";
+    sep.setAttribute("role", "separator");
+    return sep;
+  };
+  button.addEventListener("mousedown", (e) => e.preventDefault());
+  renderSnippetMenu = () => {
+    const list = snippetFiles.map((x) => {
+      const b = item(x.name, x.preview, () => insertSnippet(x));
+      b.dataset.snippet = x.file;
+      if (x.hotkey) {
+        const kbd = document.createElement("kbd");
+        kbd.textContent = x.hotkey;
+        b.append(kbd);
+      }
+      return b;
+    });
+    if (!list.length) {
+      const none = item(ui.snippetNone, "", () => {});
+      none.disabled = true;
+      list.push(none);
+    }
+    menu.replaceChildren(...list, separator(),
+      item(ui.snippetSave, ui.snippetSaveTip, saveSnippet),
+      item(ui.snippetManage, ui.snippetManageTip, () => post({ type: "manageSnippets" })));
+  };
+  button.addEventListener("click", () => {
+    if (menu.hasAttribute("data-open")) { close(); return; }
+    post({ type: "listSnippets" });    // (the host answers "snippets": the list is drawn again with what it found)
+    renderSnippetMenu();
     const r = button.getBoundingClientRect();
     menu.style.left = `${Math.round(r.left)}px`;
     menu.style.top = `${Math.round(r.bottom + 4)}px`;
@@ -2022,7 +2158,7 @@ function paletteItems() {
     items.push(item);
   };
   // (the Paragraph dialog's own fields; its launcher listed once, from Home)
-  const skip = (el) => !!el.closest('.dxr-pop, .dxr-dialog, [data-dxr="findbar"], [data-dxr="loader"], .dax-palette-back, .dax-macromenu')
+  const skip = (el) => !!el.closest('.dxr-pop, .dxr-dialog, [data-dxr="findbar"], [data-dxr="loader"], .dax-palette-back, .dax-macromenu, .dax-snippetmenu')
     || el.type === "file" || el.dataset.dxr === "filebutton" || el.dataset.dxr === "save" || el.dataset.dxr === "pastemore"
     || el.dataset.dxr === "paralaunchlayout";
   for (const el of root.querySelectorAll("button, input[type=checkbox]")) {
@@ -2035,7 +2171,7 @@ function paletteItems() {
         run: () => runControl(el, () => el.click()) });
     } else {
       // (the palette's own buttons; the Macros list, whose macros are listed one by one; the gear, File > Settings)
-      if (el.matches(".dax-palette-button, .dax-palettetab, .dax-macrobutton, .dax-settings, .dax-recmark, .dax-userbutton")) continue;
+      if (el.matches(".dax-palette-button, .dax-palettetab, .dax-macrobutton, .dax-snippetbutton, .dax-settings, .dax-recmark, .dax-userbutton")) continue;
       const name = controlName(el);
       add({ key: "b:" + (id || name + "@" + placeOf(el)), name, where: placeOf(el), description: squash(el.title), keys: shortcutOf(el),
         on: el.classList.contains("dxr-on") || el.getAttribute("aria-pressed") === "true", off,
@@ -2094,6 +2230,13 @@ function paletteItems() {
   }
   for (const m of macros())
     add({ key: "m:" + (m.fn ?? m.path), name: m.label, where: ui.paletteMacro, description: m.title, keys: m.hotkey ?? "", on: false, off: false, run: () => runMacro(m) });
+  // Insert > Snippets: each snippet, then Save Selection and Manage.
+  const snippetButton = root.querySelector(".dax-snippetbutton");
+  const snippetWhere = (snippetButton && placeOf(snippetButton)) || ui.paletteSnippet;
+  for (const x of snippetFiles)
+    add({ key: "sn:" + x.file, name: `${ui.paletteSnippet}: ${x.name}`, where: snippetWhere, description: x.preview, keys: x.hotkey ?? "", on: false, off: false, run: () => insertSnippet(x) });
+  add({ key: "sn-save", name: squash(ui.snippetSave), where: snippetWhere, description: ui.snippetSaveTip, keys: "", on: false, off: false, run: saveSnippet });
+  add({ key: "sn-manage", name: squash(ui.snippetManage), where: snippetWhere, description: ui.snippetManageTip, keys: "", on: false, off: false, run: () => post({ type: "manageSnippets" }) });
   return items;
 }
 
@@ -2375,6 +2518,10 @@ host?.addEventListener("message", async (e) => {
       renderUserButtons();
       if (document.querySelector(".dax-macromenu[data-open]")) renderMacroMenu();
       palette?.refresh();
+    } else if (m.type === "snippets") {
+      snippetFiles = m.entries ?? [];
+      if (document.querySelector(".dax-snippetmenu[data-open]")) renderSnippetMenu();
+      palette?.refresh();
     } else if (m.type === "preparePrint") {
       preparePrint(m.id);
     } else if (m.type === "printDone") {
@@ -2487,6 +2634,7 @@ host?.addEventListener("message", async (e) => {
       post({ type: "log", text: "find options: " + (await findOptionsChecks()) });
       post({ type: "log", text: "hooks: " + (await hookChecks()) });
       post({ type: "log", text: "ribbon buttons: " + (await userButtonChecks()) });
+      post({ type: "log", text: "snippets: " + (await snippetChecks()) });
       for (const paginated of [false, true]) post({ type: "log", text: `empty resize (${paginated ? "page" : "continuous"} view): ` + (await emptyResizeChecks(paginated)) });
       // Doc.ahk: tests\doc-check.ahk, a script of its own, drives the editor and logs what it found.
       post({ type: "log", text: "doc api: " + ({ true: "ok", false: "FAILED", null: "FAILED (no answer)" })[await measureAsk("measureDocScript", "docScript", 70000)] });

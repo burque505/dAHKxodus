@@ -129,7 +129,8 @@ public static class MacroHotkeys {
         if (AltGrCharacter(Parse(keys)) is { } character && !Ask(Lang.T("hotkeys.altGr", keys, character))) return false;
         var other = map.FirstOrDefault(p => p.Value == keys && !p.Key.Equals(fileName, StringComparison.OrdinalIgnoreCase)).Key;
         if (other != null) {
-            if (!Ask(Lang.T("hotkeys.other", keys, Path.GetFileNameWithoutExtension(other), Path.GetFileNameWithoutExtension(fileName)))) return false;
+            static string Shown(string key) => Path.GetFileNameWithoutExtension(key.StartsWith(Snippets.HotkeyPrefix) ? key[Snippets.HotkeyPrefix.Length..] : key);
+            if (!Ask(Lang.T("hotkeys.other", keys, Shown(other), Shown(fileName)))) return false;
             map.Remove(other);
         }
         return true;
@@ -198,7 +199,8 @@ public sealed class MacroHotkeysDialog : Form {
     /// Every macro's hotkey as the dialog leaves it (file name = keys).
     public Dictionary<string, string> Result => map;
 
-    public MacroHotkeysDialog(IEnumerable<(string fileName, string label, bool user)> macros, Dictionary<string, string> hotkeys,
+    /// rows: each macro (its file name, label, folder) and each snippet (Snippets.HotkeyPrefix + its file name).
+    public MacroHotkeysDialog(IEnumerable<(string fileName, string label, string where)> macros, Dictionary<string, string> hotkeys,
             IReadOnlyDictionary<string, string> taken) {
         map = new(hotkeys, StringComparer.OrdinalIgnoreCase);
         this.taken = taken;
@@ -216,8 +218,8 @@ public sealed class MacroHotkeysDialog : Form {
         list.Columns.Add(Lang.T("hotkeys.macro"), 280);
         list.Columns.Add(Lang.T("hotkeys.hotkey"), 150);
         list.Columns.Add(Lang.T("hotkeys.where"), 130);
-        foreach (var (fileName, name, user) in macros) {
-            var item = new ListViewItem([name, map.GetValueOrDefault(fileName) ?? "", Lang.T(user ? "hotkeys.mine" : "hotkeys.program")]) { Tag = fileName };
+        foreach (var (fileName, name, where) in macros) {
+            var item = new ListViewItem([name, map.GetValueOrDefault(fileName) ?? "", where]) { Tag = fileName };
             list.Items.Add(item);
         }
 
