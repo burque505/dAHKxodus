@@ -787,5 +787,16 @@
   "Styles Pane": "Panel Estilos",
   "Show the document's styles beside it: apply, modify, create and delete them": "Mostrar los estilos del documento a su lado: aplicarlos, modificarlos, crearlos y eliminarlos",
   "Delete the style {0}? Text in it takes the style it was based on.": "¿Eliminar el estilo {0}? El texto que lo usa toma el estilo en que se basaba.",
-  "{0} could not be deleted.": "No se pudo eliminar {0}."
+  "{0} could not be deleted.": "No se pudo eliminar {0}.",
+  "Select": "Seleccionar",
+  "Select ▾": "Seleccionar ▾",
+  "Select the cell, row, column or whole table at the caret": "Seleccionar la celda, fila, columna o tabla completa donde está el cursor",
+  "Select Cell": "Seleccionar celda",
+  "Select the cell the caret is in": "Seleccionar la celda donde está el cursor",
+  "Select Column": "Seleccionar columna",
+  "Select the column the caret is in": "Seleccionar la columna donde está el cursor",
+  "Select Row": "Seleccionar fila",
+  "Select the row the caret is in": "Seleccionar la fila donde está el cursor",
+  "Select Table": "Seleccionar tabla",
+  "Select the whole table": "Seleccionar toda la tabla"
 }
