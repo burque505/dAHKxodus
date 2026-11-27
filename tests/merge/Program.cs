@@ -43,6 +43,36 @@ static class Program {
             Check("mergefield: quoted name with a space", text.Contains("Ann"), text);
         }
 
+        // ---- A field list (Use a Field List...): names one a line, or every value of a CSV, once each
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "dax-fieldlist-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "names.txt"), "First\r\n\r\n  Last Name \nfirst\nAmount\n");
+            File.WriteAllText(Path.Combine(dir, "names.csv"), "First,Last,Amount\nCity,\"State, Code\"\n");
+            var txt = MergeData.FieldList(Path.Combine(dir, "names.txt"));
+            var csv = MergeData.FieldList(Path.Combine(dir, "names.csv"));
+            Directory.Delete(dir, true);
+            Check("field list: .txt one a line, trimmed, once each", string.Join("|", txt) == "First|Last Name|Amount", string.Join("|", txt));
+            Check("field list: .csv every value", string.Join("|", csv) == "First|Last|Amount|City|State, Code", string.Join("|", csv));
+        }
+
+        // ---- Number switches: CardText, OrdText, Ordinal, DollarText, Roman; a percent from a formula
+        {
+            var doc = Make(P(Field(" MERGEFIELD N \\* CardText ")), P(Field(" MERGEFIELD N \\* OrdText ")),
+                P(Field(" MERGEFIELD N \\* Ordinal ")), P(Field(" MERGEFIELD Pay \\* DollarText ")),
+                P(Field(" MERGEFIELD N \\* Roman ")), P(Field(" MERGEFIELD N \\* roman ")), P(Field(" MERGEFIELD Twelve \\* Ordinal ")),
+                P(Begin(), Instr(" = "), Field(" MERGEFIELD Rate "), Instr(" * 100 \\# \"0.00%\" "), Separate(), End()),
+                P(Begin(), Instr(" = "), Field(" MERGEFIELD Rate "), Instr(" * 100 \\* CardText "), Separate(), End()));
+            var text = Text(Merge.Fill(doc, V(("N", "42"), ("Pay", "1234.56"), ("Twelve", "12"), ("Rate", "0.255"))));
+            Check("switch: \\* CardText", text.Contains("forty-two\n"), text);
+            Check("switch: \\* OrdText", text.Contains("forty-second"), text);
+            Check("switch: \\* Ordinal", text.Contains("42nd") && text.Contains("12th"), text);
+            Check("switch: \\* DollarText", text.Contains("one thousand two hundred thirty-four and 56/100"), text);
+            Check("switch: \\* Roman / roman", text.Contains("XLII") && text.Contains("xlii"), text);
+            Check("formula: percent", text.Contains("25.50%"), text);
+            Check("formula: percent as text", text.Contains("twenty-six") || text.Contains("twenty-five"), text);
+        }
+
         // ---- IF: yes/no over two paragraphs, a comparison with text, wildcards, nested in a table cell
         {
             byte[] Doc() => Make(

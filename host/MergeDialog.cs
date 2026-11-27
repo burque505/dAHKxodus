@@ -298,7 +298,7 @@ public sealed class MergeDialog : Form {
             MessageBox.Show(this, Lang.T("mergeData.failed", dlg.FileName, ex.Message), Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         } finally { UseWaitCursor = false; }
-        var table = tables.Count == 1 ? tables[0] : ChooseTable(tables);
+        var table = tables.Count == 1 ? tables[0] : ChooseTable(this, Font, tables);
         if (table == null) return;
         if (LoadSource(dlg.FileName, table, quiet: false)) Remember();
     }
@@ -336,10 +336,10 @@ public sealed class MergeDialog : Form {
         SetData(MergeData.Text(text.Text, Lang.T("mergeData.pasted")), "", "");
     }
 
-    string? ChooseTable(List<string> tables) {
+    public static string? ChooseTable(IWin32Window owner, Font font, List<string> tables) {
         using var dlg = new Form {
             Text = Lang.T("mergeData.tableTitle"), FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false,
-            StartPosition = FormStartPosition.CenterParent, Font = Font, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10),
+            StartPosition = FormStartPosition.CenterParent, Font = font, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10),
         };
         var list = new ListBox { Width = 320, Height = 240, IntegralHeight = false };
         list.Items.AddRange(tables.Cast<object>().ToArray());
@@ -355,14 +355,17 @@ public sealed class MergeDialog : Form {
         dlg.Controls.Add(outer);
         dlg.AcceptButton = ok;
         dlg.CancelButton = cancel;
-        return dlg.ShowDialog(this) == DialogResult.OK ? list.SelectedItem as string : null;
+        return dlg.ShowDialog(owner) == DialogResult.OK ? list.SelectedItem as string : null;
     }
 
     void SetData(MergeTable? table, string path, string tableName) {
         data = table;
         dataPath = path;
+        // (the rows left out last time, when this is the source they were left out of)
+        var same = Settings.Get("Merge Sources", templateKey, "") == path + (tableName != "" ? "|" + tableName : "");
         dataTable = tableName;
         skipped.Clear();
+        if (table != null && same) skipped.UnionWith(LoadSkipped(templateKey, table.Rows.Count));
         row = 0;
         match.Clear();
         if (table != null) {
@@ -406,19 +409,45 @@ public sealed class MergeDialog : Form {
 
     void Remember() {
         Settings.Set("Merge Sources", templateKey, data == null || dataPath == "" ? "" : dataPath + (dataTable != "" ? "|" + dataTable : ""));
+        SaveSkipped(templateKey, skipped, data?.Rows.Count ?? 0);
     }
+
+    // The rows left out of a document's data source ([Merge Skipped]: "rows:i,j,..."), kept while the source has as
+    // many rows as when they were left out.
+    public static HashSet<int> LoadSkipped(string key, int rows) {
+        var value = Settings.Get("Merge Skipped", key, "").Split(':', 2);
+        var set = new HashSet<int>();
+        if (value.Length == 2 && int.TryParse(value[0], out var n) && n == rows)
+            foreach (var part in value[1].Split(',', StringSplitOptions.RemoveEmptyEntries))
+                if (int.TryParse(part, out var i) && i >= 0 && i < rows) set.Add(i);
+        return set;
+    }
+
+    public static void SaveSkipped(string key, HashSet<int> skipped, int rows) =>
+        Settings.Set("Merge Skipped", key, skipped.Count == 0 ? "" : rows + ":" + string.Join(",", skipped.Order()));
 
     // ---- Recipients: the rows, with a check box each, a filter, and the row to show
 
     void EditRecipients() {
         if (data == null) return;
+        if (!EditRows(this, Font, data, skipped, row, out var show)) return;
+        SaveSkipped(templateKey, skipped, data.Rows.Count);
+        ShowRow(show >= 0 ? show : skipped.Contains(row) ? Step(1, from: -1) : row);
+    }
+
+    /// The recipients grid: a check box a row, a filter, All and None. On OK `skipped` holds the rows unticked and
+    /// `show` the row double-clicked or current (-1 none).
+    public static bool EditRows(IWin32Window owner, Font font, MergeTable data, HashSet<int> skipped, int row, out int show) {
+        show = -1;
         using var dlg = new Form {
             Text = Lang.T("mergeData.recipientsTitle"), FormBorderStyle = FormBorderStyle.Sizable, MinimizeBox = false, ShowInTaskbar = false,
-            StartPosition = FormStartPosition.CenterParent, Font = Font, ClientSize = new Size(900, 520), Padding = new Padding(10),
+            StartPosition = FormStartPosition.CenterParent, Font = font, ClientSize = new Size(900, 520), Padding = new Padding(10),
         };
         var view = new DataGridView {
             Dock = DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.DisplayedCells,
+            // (the header and the rows as tall as their text: a fixed height clips it at a larger display scale)
+            ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize, AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.DisplayedCells,
         };
         view.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "", Width = 30, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
         foreach (var c in data.Columns) view.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = c, ReadOnly = true, SortMode = DataGridViewColumnSortMode.Automatic });
@@ -442,25 +471,35 @@ public sealed class MergeDialog : Form {
         var none = new Button { Text = Lang.T("mergeData.noneButton"), AutoSize = true };
         all.Click += (s, e) => CheckVisible(true);
         none.Click += (s, e) => CheckVisible(false);
-        var topRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
+        var topRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0, 0, 0, 6) };
         topRow.Controls.AddRange([new Label { Text = Lang.T("mergeData.find"), AutoSize = true, Margin = new Padding(0, 6, 6, 0) }, filter, all, none]);
         var ok = new Button { Text = Lang.T("settings.ok"), DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(88, 0) };
         var cancel = new Button { Text = Lang.T("settings.cancel"), DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(88, 0) };
-        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(0, 8, 0, 0) };
+        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0), Margin = Padding.Empty };
         buttons.Controls.AddRange([cancel, ok, new Label { Text = Lang.T("mergeData.recipientsHint"), AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(0, 6, 12, 0) }]);
-        dlg.Controls.Add(view);
-        dlg.Controls.Add(topRow);
-        dlg.Controls.Add(buttons);
+        // (a table, not docking: the Find row takes its own height, so it never covers the grid's header)
+        view.Dock = DockStyle.Fill;
+        view.Margin = Padding.Empty;
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.Controls.Add(topRow, 0, 0);
+        layout.Controls.Add(view, 0, 1);
+        layout.Controls.Add(buttons, 0, 2);
+        dlg.Controls.Add(layout);
         dlg.CancelButton = cancel;
-        var show = -1;
-        view.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) { show = (int)view.Rows[e.RowIndex].Tag!; dlg.DialogResult = DialogResult.OK; } };
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var picked = -1;
+        view.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) { picked = (int)view.Rows[e.RowIndex].Tag!; dlg.DialogResult = DialogResult.OK; } };
+        if (dlg.ShowDialog(owner) != DialogResult.OK) return false;
         view.EndEdit();
         skipped.Clear();
         foreach (DataGridViewRow r in view.Rows) if (r.Cells[0].Value is false) skipped.Add((int)r.Tag!);
-        if (show < 0 && view.CurrentRow?.Tag is int current) show = current;
-        if (show >= 0) skipped.Remove(show);
-        ShowRow(show >= 0 ? show : skipped.Contains(row) ? Step(1, from: -1) : row);
+        if (picked < 0 && view.CurrentRow?.Tag is int current) picked = current;
+        if (picked >= 0) skipped.Remove(picked);
+        show = picked;
+        return true;
     }
 
     // ---- Match Fields: each field's column

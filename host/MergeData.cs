@@ -64,6 +64,17 @@ public static class MergeData {
         }
     }
 
+    /// A field list (Mailings > Use a Field List...): a text file of names, one a line, or a CSV whose every value is
+    /// a name (as MergeFielder reads them), in order, once each.
+    public static List<string> FieldList(string path) {
+        var text = ReadText(path);
+        IEnumerable<string> names = Ext(path) == ".csv"
+            ? Text(text, Path.GetFileNameWithoutExtension(path)) is var t ? t.Columns.Concat(t.Rows.SelectMany(r => r)) : []
+            : text.Split('\n');
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return names.Select(n => n.Trim()).Where(n => n != "" && seen.Add(n)).ToList();
+    }
+
     /// Delimited text: tabs if the first line has one, else ; or , (whichever the first line has more of outside
     /// quotes); "quoted" values may hold separators, line breaks and "" for a quote. Blank lines are left out.
     public static MergeTable Text(string text, string name) {

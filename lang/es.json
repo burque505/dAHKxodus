@@ -169,6 +169,8 @@
   "merge.notSaved": "No se pudo escribir el registro:\n{0}",
   "merge.deleteAsk": "¿Eliminar el registro \"{0}\"?",
   "merge.failed": "La combinación de correspondencia falló:\n{0}",
+  "mergeData.fieldListFilter": "Listas de campos (*.txt;*.csv)|*.txt;*.csv|Todos los archivos (*.*)|*.*",
+  "mergeData.fieldListName": "{0} (lista de campos)",
   "mergeData.group": "Origen de datos",
   "mergeData.source": "Datos:",
   "mergeData.none": "(ninguno: los valores escritos abajo)",

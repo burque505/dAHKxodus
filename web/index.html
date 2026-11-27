@@ -2555,6 +2555,9 @@ host?.addEventListener("message", async (e) => {
       ribbon.setSystemFonts?.(m.names ?? []);
       ribbon.setRecentFonts?.(m.recent ?? []);
       ribbon.setCaptionLabels?.(m.captionLabels ?? []);
+    } else if (m.type === "mergeColumns") {
+      // The data source's columns (Select Recipients, or the one this document's merge remembers): Insert Merge Field's.
+      ribbon.setMergeColumns?.(m.columns ?? [], m.source ?? "");
     } else if (m.type === "ui") {
       Object.assign(ui, m);
       relabel();
@@ -2731,6 +2734,9 @@ ribbon = mountRibbon("#app", {
   onRecentFontsChange: (names) => post({ type: "recentFonts", names }),
   // Insert Caption's own labels (New Label): the host keeps them ([Captions] Labels).
   onCaptionLabelsChange: (labels) => post({ type: "captionLabels", labels }),
+  // Mailings > Start Mail Merge..., Select Recipients (list, field list, edit, clear), Finish & Merge..., and the Merge
+  // Fields pane's Browse... and Clear: the host's (its data sources, its dialogs).
+  onMailings: (command) => post({ type: "mailings", command }),
   // Paste: Word's clipboard HTML names its pictures as files in the temporary folder, which the page cannot read; the
   // host reads them (EngineHost.ReadPastedImage). Pictures on the web the page fetches itself.
   resolvePasteImage: async (src) => {

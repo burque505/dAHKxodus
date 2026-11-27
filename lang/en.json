@@ -169,6 +169,8 @@
   "merge.notSaved": "The record could not be written:\n{0}",
   "merge.deleteAsk": "Delete the record \"{0}\"?",
   "merge.failed": "The mail merge failed:\n{0}",
+  "mergeData.fieldListFilter": "Field lists (*.txt;*.csv)|*.txt;*.csv|All files (*.*)|*.*",
+  "mergeData.fieldListName": "{0} (field list)",
   "mergeData.group": "Data source",
   "mergeData.source": "Data:",
   "mergeData.none": "(none: the values typed below)",

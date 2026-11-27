@@ -3,7 +3,7 @@
 # together with web\package-lock.json.
 repo=https://github.com/burque505/Docxodus
 branch=integration/m2
-commit=3ba46f307a340bf976363d403b4455441e989db7
+commit=3bf3d51ec56d5ac19069441c3aeb9e8f26b13ec9
 # SHA-256 of web\vendor\docxodus-0.0.0.tgz, the npm package web\package-lock.json was made from. The WASM build is not
 # byte-for-byte repeatable, so a rebuild of the same commit may differ: then npm install changes package-lock.json too.
-npm-sha256=d64070e7c7252aba709f1b329887540f68ee51222130abc902e768614e371064
+npm-sha256=7824b81fccf23d66c915c78beec2a748bbc72408261f4922f1881551a652ecec

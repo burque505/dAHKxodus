@@ -390,6 +390,11 @@ public static class Merge {
                 "lower" => value.ToLower(CultureInfo.CurrentCulture),
                 "caps" => CultureInfo.CurrentCulture.TextInfo.ToTitleCase(value.ToLower(CultureInfo.CurrentCulture)),
                 "firstcap" => value.Length > 0 ? char.ToUpper(value[0], CultureInfo.CurrentCulture) + value[1..] : value,
+                "cardtext" => Whole(value) is { } c ? CardText(c) : value,
+                "ordtext" => Whole(value) is { } o ? OrdText(o) : value,
+                "ordinal" => Whole(value) is { } i ? Ordinal(i) : value,
+                "dollartext" => decimal.TryParse(Number(value), NumberStyles.Any, CultureInfo.CurrentCulture, out var dollars) ? DollarText(dollars) : value,
+                "roman" => Whole(value) is { } r && r is > 0 and < 4000 ? (m.Groups[1].Value == "roman" ? Roman(r).ToLowerInvariant() : Roman(r)) : value,
                 _ => value,
             };
         }
@@ -398,6 +403,58 @@ public static class Merge {
             if (Switch(code, 'f') is { } after) value += after;
         }
         return value;
+    }
+
+    // ---- Number switches: \* CardText (forty-two), OrdText (forty-second), Ordinal (42nd), DollarText, Roman (Word's English)
+
+    static long? Whole(string value) =>
+        decimal.TryParse(Number(value), NumberStyles.Any, CultureInfo.CurrentCulture, out var n) && Math.Abs(n) < 1e15m ? (long)Math.Round(n) : null;
+
+    static readonly string[] Ones = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+    static readonly string[] Tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+
+    internal static string CardText(long n) {
+        if (n < 0) return "minus " + CardText(-n);
+        if (n < 20) return Ones[n];
+        if (n < 100) return Tens[n / 10] + (n % 10 != 0 ? "-" + Ones[n % 10] : "");
+        if (n < 1000) return Ones[n / 100] + " hundred" + (n % 100 != 0 ? " " + CardText(n % 100) : "");
+        foreach (var (size, word) in new[] { (1_000_000_000_000L, "trillion"), (1_000_000_000L, "billion"), (1_000_000L, "million"), (1000L, "thousand") })
+            if (n >= size) return CardText(n / size) + " " + word + (n % size != 0 ? " " + CardText(n % size) : "");
+        return n.ToString(CultureInfo.InvariantCulture);
+    }
+
+    internal static string OrdText(long n) {
+        var words = CardText(n);
+        var cut = Math.Max(words.LastIndexOf(' '), words.LastIndexOf('-')) + 1;
+        var last = words[cut..];
+        var ord = last switch {
+            "one" => "first", "two" => "second", "three" => "third", "five" => "fifth", "eight" => "eighth", "nine" => "ninth", "twelve" => "twelfth",
+            _ when last.EndsWith('y') => last[..^1] + "ieth",
+            _ => last + "th",
+        };
+        return words[..cut] + ord;
+    }
+
+    internal static string Ordinal(long n) {
+        var t = Math.Abs(n) % 100;
+        var suffix = t is >= 11 and <= 13 ? "th" : (Math.Abs(n) % 10) switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" };
+        return n.ToString(CultureInfo.InvariantCulture) + suffix;
+    }
+
+    // Word's DollarText: the dollars in words, the cents as a fraction (one hundred twenty-three and 45/100).
+    internal static string DollarText(decimal n) {
+        var whole = (long)Math.Floor(Math.Abs(n));
+        var cents = (int)Math.Round((Math.Abs(n) - whole) * 100);
+        if (cents == 100) { whole++; cents = 0; }
+        return (n < 0 ? "minus " : "") + CardText(whole) + " and " + cents.ToString("00", CultureInfo.InvariantCulture) + "/100";
+    }
+
+    internal static string Roman(long n) {
+        var sb = new StringBuilder();
+        foreach (var (v, r) in new[] { (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I") })
+            while (n >= v) { sb.Append(r); n -= v; }
+        return sb.ToString();
     }
 
     // Word's number picture: literal text before and after, 0 and # digits, "," grouping, "." decimals ($,0.00).

@@ -650,6 +650,106 @@ class MainForm : Form {
         OpenMerged(filled);
     }
 
+    // The key the merge dialog keeps this document's data source under ([Merge Sources]).
+    string MergeKey => Path.GetFileNameWithoutExtension(DocName);
+
+    // Mailings > Select Recipients > Use an Existing List... (and the Merge Fields pane's Browse...): a data source for
+    // this document (the merge dialog starts from it), its columns listed by the Merge Fields pane. It replaces a field
+    // list.
+    void SelectRecipients() {
+        if (asking) return;
+        var remembered = Settings.Get("Merge Sources", MergeKey, "").Split('|', 2)[0];
+        string path;
+        List<string> tables;
+        asking = true;
+        try {
+            using var dlg = new OpenFileDialog { Filter = Lang.T("mergeData.filter", MergeData.Extensions), InitialDirectory = remembered != "" ? Path.GetDirectoryName(remembered) : "" };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            path = dlg.FileName;
+            try { tables = MergeData.Tables(path); }
+            catch (Exception ex) { MessageBox.Show(this, Lang.T("mergeData.failed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            var table = tables.Count == 1 ? tables[0] : MergeDialog.ChooseTable(this, Font, tables);
+            if (table == null) return;
+            MergeTable loaded;
+            try { loaded = MergeData.Load(path, table); }
+            catch (Exception ex) { MessageBox.Show(this, Lang.T("mergeData.failed", path, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            Settings.Set("Merge Sources", MergeKey, path + (table != "" ? "|" + table : ""));
+            Settings.Set("Merge Skipped", MergeKey, "");
+            Settings.Set("Merge Field Lists", MergeKey, "");
+            Log($"merge: recipients {path} {table}, {loaded.Columns.Count} column(s), {loaded.Rows.Count} row(s)");
+            Send(new { type = "mergeColumns", columns = loaded.Columns, source = SourceName(path, table) });
+        } finally { asking = false; }
+    }
+
+    static string SourceName(string path, string table) => Path.GetFileName(path) + (table != "" ? " › " + table : "");
+
+    // Mailings > Select Recipients > Use a Field List...: a list of field names (one a line, or a CSV of names) for the
+    // Merge Fields pane, as MergeFielder reads one; no recipients. It replaces a data source.
+    void SelectFieldList() {
+        if (asking) return;
+        asking = true;
+        try {
+            var remembered = Settings.Get("Merge Field Lists", MergeKey, "");
+            using var dlg = new OpenFileDialog { Filter = Lang.T("mergeData.fieldListFilter"), InitialDirectory = remembered != "" ? Path.GetDirectoryName(remembered) : "" };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            List<string> names;
+            try { names = MergeData.FieldList(dlg.FileName); }
+            catch (Exception ex) { MessageBox.Show(this, Lang.T("mergeData.failed", dlg.FileName, ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            Settings.Set("Merge Field Lists", MergeKey, dlg.FileName);
+            Settings.Set("Merge Sources", MergeKey, "");
+            Settings.Set("Merge Skipped", MergeKey, "");
+            Log($"merge: field list {dlg.FileName}, {names.Count} name(s)");
+            Send(new { type = "mergeColumns", columns = names, source = Lang.T("mergeData.fieldListName", Path.GetFileName(dlg.FileName)) });
+        } finally { asking = false; }
+    }
+
+    // Mailings > Select Recipients > Edit Recipient List...: the data source's rows, ticked or not; the merge leaves out
+    // the unticked ones.
+    void EditRecipientList() {
+        if (asking) return;
+        var parts = Settings.Get("Merge Sources", MergeKey, "").Split('|', 2);
+        if (parts[0] == "" || !File.Exists(parts[0])) return;
+        asking = true;
+        try {
+            MergeTable data;
+            try { data = MergeData.Load(parts[0], parts.Length > 1 ? parts[1] : ""); }
+            catch (Exception ex) { MessageBox.Show(this, Lang.T("mergeData.failed", parts[0], ex.Message), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            var skipped = MergeDialog.LoadSkipped(MergeKey, data.Rows.Count);
+            if (!MergeDialog.EditRows(this, Font, data, skipped, 0, out _)) return;
+            MergeDialog.SaveSkipped(MergeKey, skipped, data.Rows.Count);
+            Log($"merge: {data.Rows.Count - skipped.Count} of {data.Rows.Count} recipient(s) included");
+        } finally { asking = false; }
+    }
+
+    // Mailings > Select Recipients > Clear Recipients (and the Merge Fields pane's Clear): this document has no data
+    // source or field list any more.
+    void ClearRecipients() {
+        foreach (var section in new[] { "Merge Sources", "Merge Skipped", "Merge Field Lists" }) Settings.Set(section, MergeKey, "");
+        Log("merge: recipients cleared");
+        Send(new { type = "mergeColumns", columns = Array.Empty<string>(), source = "" });
+    }
+
+    // The columns of this document's remembered data source (or the names of its field list), for the Merge Fields
+    // pane; none: an empty list.
+    async void SendMergeColumns() {
+        var remembered = Settings.Get("Merge Sources", MergeKey, "");
+        var parts = remembered.Split('|', 2);
+        var list = Settings.Get("Merge Field Lists", MergeKey, "");
+        List<string> columns = new();
+        var source = "";
+        try {
+            if (remembered != "" && File.Exists(parts[0])) {
+                var table = parts.Length > 1 ? parts[1] : "";
+                columns = await Task.Run(() => MergeData.Load(parts[0], table).Columns);
+                source = SourceName(parts[0], table);
+            } else if (list != "" && File.Exists(list)) {
+                columns = await Task.Run(() => MergeData.FieldList(list));
+                source = Lang.T("mergeData.fieldListName", Path.GetFileName(list));
+            }
+        } catch (Exception ex) { Log($"merge data {remembered}{list}: {ex.Message}"); }
+        if (!web.IsDisposed) Send(new { type = "mergeColumns", columns, source });
+    }
+
     // A merged document in a new window (or this one, if it holds only an untouched new document).
     void OpenMerged(byte[] filled) {
         var temp = Path.Combine(Path.GetTempPath(), $"dAHKxodus-merge-{Guid.NewGuid():N}.docx");
@@ -992,6 +1092,16 @@ class MainForm : Form {
                     if (recovering != null) RecoveredOpen();
                     if (measureOut != "" && !measureStarted) { measureStarted = true; Send(new { type = "measure" }); }
                     DocumentReady(true);
+                    SendMergeColumns();
+                    break;
+                case "mailings":    // Mailings > Start Mail Merge..., Select Recipients..., Finish & Merge...
+                    switch (Str("command")) {
+                        case "recipients": BeginInvoke(SelectRecipients); break;
+                        case "fieldlist": BeginInvoke(SelectFieldList); break;
+                        case "editrecipients": BeginInvoke(EditRecipientList); break;
+                        case "clearrecipients": ClearRecipients(); break;
+                        default: BeginInvoke(MailMerge); break;
+                    }
                     break;
                 case "blankOpened":    // a new document (New, or a start without one) is in the editor
                     DocumentReady(true);
