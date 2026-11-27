@@ -553,9 +553,12 @@ class MainForm : Form {
                     return Merge.Fill(bytes, dlg.Values);
                 case MergeOutput.OneDocument: {
                     var clock = Stopwatch.StartNew();
-                    var sources = dlg.Rows.Select((v, i) => new Docxodus.Source(new Docxodus.WmlDocument($"row{i + 1}.docx", Merge.Fill(bytes, v)), true)).ToList();
+                    // (a copy for each record: NEXT takes the next row into the same copy, SKIPIF leaves a record out)
+                    var copies = Merge.MergeAll(bytes, dlg.Rows);
+                    if (copies.Count == 0) { MessageBox.Show(this, Lang.T("mergeData.noRows"), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Information); return null; }
+                    var sources = copies.Select(c => new Docxodus.Source(new Docxodus.WmlDocument($"row{c.Number}.docx", c.Bytes), true)).ToList();
                     var all = Docxodus.DocumentBuilder.BuildDocument(sources).DocumentByteArray;
-                    Log($"merge: {name}, {dlg.Rows.Count} rows in one document ({all.Length:N0} bytes, {clock.ElapsedMilliseconds} ms)");
+                    Log($"merge: {name}, {dlg.Rows.Count} rows, {copies.Count} record(s) in one document ({all.Length:N0} bytes, {clock.ElapsedMilliseconds} ms)");
                     return all;
                 }
                 default: {
@@ -567,10 +570,10 @@ class MainForm : Form {
                     if (pick.ShowDialog(this) != DialogResult.OK) return null;
                     Settings.Set("Merge", "OutputFolder", pick.SelectedPath);
                     var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    var items = dlg.Rows.Select((v, i) => (values: v, path: MergedFileName(pick.SelectedPath, dlg.FilePattern, Path.GetFileNameWithoutExtension(name), v, i + 1, pdf ? ".pdf" : ".docx", names))).ToList();
+                    var items = Merge.MergeAll(bytes, dlg.Rows).Select(c => (bytes: c.Bytes, path: MergedFileName(pick.SelectedPath, dlg.FilePattern, Path.GetFileNameWithoutExtension(name), c.First, c.Number, pdf ? ".pdf" : ".docx", names))).ToList();
                     written = true;
-                    if (pdf) { _ = WriteMergedPdfsAsync(bytes, items, pick.SelectedPath); return null; }
-                    foreach (var (values, path) in items) File.WriteAllBytes(path, Merge.Fill(bytes, values));
+                    if (pdf) { _ = WriteMergedPdfsAsync(items, pick.SelectedPath); return null; }
+                    foreach (var (merged, path) in items) File.WriteAllBytes(path, merged);
                     Log($"merge: {name}, {items.Count} file(s) written to {pick.SelectedPath}");
                     SendStatus(Lang.T("mergeData.written", items.Count, pick.SelectedPath));
                     OpenFolder(pick.SelectedPath);
@@ -587,7 +590,7 @@ class MainForm : Form {
     // A merged file's path: the pattern's {Field} as the row's value (names compared as MergeData.Key does), {#} the
     // row's number; the template's name and the number when there is no pattern. Characters a file name can't have
     // become _, and a name used already (in this merge or in the folder) gets " (2)", " (3)"...
-    static string MergedFileName(string folder, string pattern, string template, Dictionary<string, string> values, int number, string ext, HashSet<string> used) {
+    static string MergedFileName(string folder, string pattern, string template, IReadOnlyDictionary<string, string> values, int number, string ext, HashSet<string> used) {
         if (pattern == "") pattern = template + " {#}";
         var name = System.Text.RegularExpressions.Regex.Replace(pattern, @"\{([^{}]+)\}", m => {
             var key = m.Groups[1].Value.Trim();
@@ -610,14 +613,14 @@ class MainForm : Form {
 
     // A PDF per row: a window of its own opens each merged document and writes its pages (the page's PDF export),
     // then closes; this window's status bar counts.
-    async Task WriteMergedPdfsAsync(byte[] bytes, List<(Dictionary<string, string> values, string path)> items, string folder) {
+    async Task WriteMergedPdfsAsync(List<(byte[] bytes, string path)> items, string folder) {
         var w = OpenWindow("", this);
         var done = 0;
         try {
             await w.firstDocument.Task;
-            foreach (var (values, path) in items) {
+            foreach (var (merged, path) in items) {
                 var temp = Path.Combine(Path.GetTempPath(), $"dAHKxodus-merge-{Guid.NewGuid():N}.docx");
-                File.WriteAllBytes(temp, Merge.Fill(bytes, values));
+                File.WriteAllBytes(temp, merged);
                 MergedFiles.Add(temp);
                 if (!await w.WaitForDocument(() => w.OpenFile(temp, quiet: true, asNew: true))) { Log("merge pdf: could not open row " + (done + 1)); break; }
                 if (!await w.ExportPdfAsync(path, quiet: true)) { Log("merge pdf: FAILED " + path); break; }

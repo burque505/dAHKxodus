@@ -53,6 +53,47 @@ static class Program {
             Check("blank lines: empty field-only lines dropped", text == "Ann\n1 Main\nAttn: \nTaos, NM", text.Replace("\n", "|"));
         }
 
+        // ---- Records: NEXT takes the next row into the same copy (labels); NEXTIF when its condition holds; SKIPIF
+        // leaves the record out; MERGEREC the row's number, MERGESEQ the copy's
+        {
+            IReadOnlyDictionary<string, string> Row(string name, string status = "") => V(("Name", name), ("Status", status));
+            var labels = Make(P(Field(" MERGEFIELD Name "), R(" #"), Field(" MERGEREC ")), P(Field(" NEXT ")),
+                P(Field(" MERGEFIELD Name "), R(" #"), Field(" MERGEREC ")), P(R("copy "), Field(" MERGESEQ ")));
+            var rows = new[] { Row("Ann"), Row("Bob"), Row("Cy") };
+            var copies = Merge.MergeAll(labels, rows);
+            Check("next: two rows a copy, three rows two copies", copies.Count == 2, copies.Count.ToString());
+            var t1 = Text(copies[0].Bytes);
+            var t2 = Text(copies[1].Bytes);
+            Check("next: the first copy has rows 1 and 2", t1.Contains("Ann #1") && t1.Contains("Bob #2") && t1.Contains("copy 1"), t1.Replace("\n", "|"));
+            Check("next: the second copy row 3, then nothing", t2.Contains("Cy #3") && t2.Contains("copy 2") && !t2.Contains("Ann"), t2.Replace("\n", "|"));
+            Check("next: the copy's first row", copies[1].First["Name"] == "Cy", copies[1].First["Name"]);
+
+            var skip = Make(P(Begin(), Instr(" SKIPIF "), Field(" MERGEFIELD Status "), Instr(" = \"void\" "), Separate(), End(),
+                R("To "), Field(" MERGEFIELD Name "), R(" ("), Field(" MERGESEQ "), R(")")));
+            var kept = Merge.MergeAll(skip, new[] { Row("Ann"), Row("Bob", "void"), Row("Cy") });
+            var skipQuoted = Make(P(Begin(), Instr(" SKIPIF \""), Field(" MERGEFIELD Status "), Instr("\" = \"to be void\" "), Separate(), End(), Field(" MERGEFIELD Name ")));
+            var keptQuoted = Merge.MergeAll(skipQuoted, new[] { Row("Ann", "to be void"), Row("Bob", "kept") });
+            Check("skipif: a quoted field, a value with spaces", keptQuoted.Count == 1 && Text(keptQuoted[0].Bytes) == "Bob", keptQuoted.Count.ToString());
+            Check("skipif: the record left out", kept.Count == 2, kept.Count.ToString());
+            Check("skipif: the others numbered in order", Text(kept[1].Bytes).Contains("To Cy (2)"), Text(kept[1].Bytes));
+
+            var nextif = Make(P(Field(" MERGEFIELD Name ")),
+                P(Begin(), Instr(" NEXTIF "), Field(" MERGEFIELD Status "), Instr(" = \"pair\" "), Separate(), End(), Field(" MERGEFIELD Name ")));
+            var pairs = Merge.MergeAll(nextif, new[] { Row("Ann", "pair"), Row("Bob"), Row("Cy") });
+            Check("nextif: true takes the next row", pairs.Count == 2 && Text(pairs[0].Bytes) == "Ann\nBob", pairs.Count + " " + Text(pairs[0].Bytes).Replace("\n", "|"));
+            Check("nextif: false stays on the row", Text(pairs[1].Bytes) == "Cy\nCy", Text(pairs[1].Bytes).Replace("\n", "|"));
+            Check("fill: one row as before", Text(Merge.Fill(labels, Row("Zed"))).StartsWith("Zed #1"), Text(Merge.Fill(labels, Row("Zed"))));
+        }
+
+        // ---- Contains (Rules' Contains: Word's wildcard comparison = "*text*")
+        {
+            byte[] Doc() => Make(P(Begin(), Instr(" IF \""), Field(" MERGEFIELD LeShort "), Instr("\" = \"*Flanagan*\" \"Is a Flanagan\" \"Is not a Flanagan\" "), Separate(), End()));
+            var yes = Text(Merge.Fill(Doc(), V(("LeShort", "Mary flanagan Smith"))));
+            var no = Text(Merge.Fill(Doc(), V(("LeShort", "Mary Smith"))));
+            Check("contains: within the text, any case", yes == "Is a Flanagan", yes);
+            Check("contains: not there", no == "Is not a Flanagan", no);
+        }
+
         // ---- A field list (Use a Field List...): names one a line, or every value of a CSV, once each
         {
             var dir = Path.Combine(Path.GetTempPath(), "dax-fieldlist-" + Guid.NewGuid().ToString("N"));

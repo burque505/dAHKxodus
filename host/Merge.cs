@@ -144,21 +144,69 @@ public static class Merge {
     // ---- Filling
 
     /// The package with its fields filled from values (keys as Scan names them; a missing one is empty).
-    public static byte[] Fill(byte[] bytes, IReadOnlyDictionary<string, string> values) {
-        var map = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
+    public static byte[] Fill(byte[] bytes, IReadOnlyDictionary<string, string> values) =>
+        FillRecord(bytes, new[] { values }, 0, 1).Bytes!;
+
+    /// One merged copy's result: its bytes (null when a SKIPIF left the record out) and the rows it took (more than
+    /// one when it has NEXT or NEXTIF fields, as labels do).
+    public sealed record MergedRecord(byte[]? Bytes, int Rows, IReadOnlyDictionary<string, string> First);
+
+    /// The document merged with every row: a copy for each record, the rows a record takes (NEXT, NEXTIF) taken
+    /// together, a record SKIPIF leaves out left out. Each copy's bytes, its first row and its number (1, 2, ...).
+    public static List<(byte[] Bytes, IReadOnlyDictionary<string, string> First, int Number)> MergeAll(byte[] bytes, IReadOnlyList<IReadOnlyDictionary<string, string>> rows) {
+        var copies = new List<(byte[], IReadOnlyDictionary<string, string>, int)>();
+        for (var i = 0; i < rows.Count;) {
+            var record = FillRecord(bytes, rows, i, copies.Count + 1);
+            if (record.Bytes != null) copies.Add((record.Bytes, record.First, copies.Count + 1));
+            i += Math.Max(1, record.Rows);
+        }
+        return copies;
+    }
+
+    // A field's record: its offset from the copy's first row (NEXT fields before it), set before any field is replaced.
+    sealed record RecordTag(int Offset);
+
+    /// The copy that starts at row `start`: its fields filled from that row on (a field after a NEXT from the next
+    /// row), MERGEREC the row's number and MERGESEQ `sequence`.
+    public static MergedRecord FillRecord(byte[] bytes, IReadOnlyList<IReadOnlyDictionary<string, string>> rows, int start, int sequence) {
+        var maps = new Dictionary<int, Dictionary<string, string>>();
+        Dictionary<string, string> RowAt(int offset) {
+            if (!maps.TryGetValue(offset, out var m))
+                maps[offset] = m = start + offset < rows.Count
+                    ? new Dictionary<string, string>(rows[start + offset], StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            return m;
+        }
+        var map = RowAt(0);
+        var first = rows.Count > start ? rows[start] : new Dictionary<string, string>();
         using var ms = new MemoryStream();
         ms.Write(bytes, 0, bytes.Length);
+        var taken = 1;
         using (var doc = WordprocessingDocument.Open(ms, true)) {
             var markers = Markers;
             if (IsJinja(doc)) markers.RemoveAll(m => m.open == "{{");
+            // (each part read once: the record tags below live on its elements)
+            var parts = Parts(doc).Select(p => (part: p, xml: Load(p))).ToList();
             // ASK fields first, anywhere: their bookmarks' values for the REF fields
             var asked = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var part in Parts(doc))
-                foreach (var f in FieldTree.Read(Load(part).Root!).SelectMany(Flatten))
+            foreach (var (_, xml) in parts)
+                foreach (var f in FieldTree.Read(xml.Root!).SelectMany(Flatten))
                     if (FieldWord(f.PlainCode()) == "ASK" && Arguments(f.PlainCode()) is { Count: > 1 } a)
                         asked[a[1]] = Get(map, a[1]) is { Length: > 0 } v ? v : Switch(f.PlainCode(), 'd') ?? "";
-            foreach (var part in Parts(doc)) {
-                var xml = Load(part);
+            // Records: the body's fields in order, NEXT and NEXTIF moving to the next row, SKIPIF leaving the record out
+            if (parts.Count > 0) {
+                var offset = 0;
+                foreach (var f in FieldTree.Read(parts[0].xml.Root!)) {
+                    foreach (var each in Flatten(f)) each.Begin.AddAnnotation(new RecordTag(offset));
+                    switch (FieldWord(f.PlainCode())) {
+                        case "NEXT": offset++; break;
+                        case "NEXTIF": if (Condition(f, RowAt(offset))) offset++; break;
+                        case "SKIPIF": if (Condition(f, RowAt(offset))) return new MergedRecord(null, offset + 1, first); break;
+                    }
+                }
+                taken = offset + 1;
+            }
+            foreach (var (part, xml) in parts) {
                 var root = xml.Root!;
                 // (Word's "don't print blank lines": a paragraph of merge fields only, all of them empty, is dropped)
                 var fieldLines = root.Descendants(P).Where(IsFieldLine).ToList();
@@ -166,7 +214,8 @@ public static class Merge {
                 for (var guard = 0; guard < 10000; guard++) {
                     var field = FieldTree.Read(root).SelectMany(Flatten).FirstOrDefault(f => f.Children.Count == 0 && Handles(f, asked));
                     if (field == null) break;
-                    Evaluate(field, map, asked);
+                    var at = field.Begin.Annotation<RecordTag>()?.Offset ?? 0;
+                    Evaluate(field, RowAt(at), asked, start + at + 1, sequence);
                 }
                 foreach (var simple in root.Descendants(FldSimple).ToList()) EvaluateSimple(simple, map, asked);
                 FillControls(root, map);
@@ -181,7 +230,33 @@ public static class Merge {
                 if (mm != null) { mm.Remove(); Store(settings, xml); }
             }
         }
-        return ms.ToArray();
+        return new MergedRecord(ms.ToArray(), taken, first);
+    }
+
+    // NEXTIF's and SKIPIF's condition, for a row: expression operator expression (or one expression, true unless
+    // empty, 0 or False), a nested MERGEFIELD as the row's value.
+    static bool Condition(Field f, Dictionary<string, string> row) {
+        var sb = new StringBuilder();
+        var stop = f.SeparateIndex >= 0 ? f.SeparateIndex : f.EndIndex;
+        for (var i = f.BeginIndex + 1; i < stop; i++) {
+            var child = f.Children.FirstOrDefault(c => c.BeginIndex == i);
+            if (child != null) {
+                var code = child.PlainCode();
+                var value = FieldWord(code) == "MERGEFIELD" ? Format(Get(row, MergeName(code)), code) : "";
+                // (in quotes, unless the code has them round it already: "{ MERGEFIELD X }")
+                var quoted = sb.Length > 0 && sb[^1] is '"' or '\u201C';
+                if (quoted) sb.Append(value.Replace("\"", ""));
+                else sb.Append('"').Append(value.Replace("\"", "")).Append('"');
+                i = child.EndIndex;
+                continue;
+            }
+            var e = f.Order[i];
+            if (e.Name == R) foreach (var x in e.Elements()) if (x.Name == InstrText || x.Name == T) sb.Append(x.Value);
+        }
+        var a = Arguments(sb.ToString());
+        if (a.Count >= 4 && a[2] is "=" or "<>" or "<" or ">" or "<=" or ">=") return Compare(a[1], a[2], a[3]);
+        var v = a.Count > 1 ? a[1].Trim() : "";
+        return v != "" && v != "0" && !v.Equals("False", StringComparison.OrdinalIgnoreCase);
     }
 
     // A paragraph whose only text is merge fields' (MERGEFIELD, in a complex or simple field): outside its fields it
@@ -224,7 +299,7 @@ public static class Merge {
     static bool Handles(Field f, Dictionary<string, string> asked) {
         var code = f.PlainCode();
         return FieldWord(code) switch {
-            "MERGEFIELD" or "FILLIN" or "ASK" or "IF" or "MERGEREC" or "MERGESEQ" => true,
+            "MERGEFIELD" or "FILLIN" or "ASK" or "IF" or "MERGEREC" or "MERGESEQ" or "NEXT" or "NEXTIF" or "SKIPIF" => true,
             "=" => f.Children.Count == 0 && Formula(code) != null,
             "REF" => Arguments(code) is { Count: > 1 } a && asked.ContainsKey(a[1]),
             _ => false,
@@ -232,7 +307,7 @@ public static class Merge {
     }
 
     // Leaf fields only (FieldTree is read again after each): a field whose children were replaced has none left.
-    static void Evaluate(Field f, Dictionary<string, string> map, Dictionary<string, string> asked) {
+    static void Evaluate(Field f, Dictionary<string, string> map, Dictionary<string, string> asked, int record = 1, int sequence = 1) {
         var code = f.PlainCode();
         switch (FieldWord(code)) {
             case "MERGEFIELD": f.ReplaceWithText(Format(Get(map, MergeName(code)), code)); break;
@@ -244,7 +319,10 @@ public static class Merge {
             }
             case "ASK": f.ReplaceWithText(""); break;
             case "REF": f.ReplaceWithText(Format(asked.TryGetValue(Arguments(code)[1], out var r) ? r : "", code)); break;
-            case "MERGEREC" or "MERGESEQ": f.ReplaceWithText("1"); break;
+            case "MERGEREC": f.ReplaceWithText(Format(record.ToString(CultureInfo.InvariantCulture), code)); break;
+            case "MERGESEQ": f.ReplaceWithText(Format(sequence.ToString(CultureInfo.InvariantCulture), code)); break;
+            // (the record's rows were taken before: these show nothing)
+            case "NEXT" or "NEXTIF" or "SKIPIF": f.ReplaceWithText(""); break;
             case "IF": f.ReplaceWithAtoms(EvaluateIf(f.CodeAtoms())); break;
             case "=": f.ReplaceWithText(Format(Formula(code)!.Value.ToString(CultureInfo.InvariantCulture), code)); break;
         }
