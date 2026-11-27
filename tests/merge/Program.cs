@@ -43,6 +43,16 @@ static class Program {
             Check("mergefield: quoted name with a space", text.Contains("Ann"), text);
         }
 
+        // ---- Blank lines: a paragraph of merge fields only, all empty, is dropped (Word's default); one with other text stays
+        {
+            var doc = Make(P(Field(" MERGEFIELD Name ")), P(Field(" MERGEFIELD Company ")), P(Field(" MERGEFIELD Street ")),
+                P(Field(" MERGEFIELD Unit "), R(" "), Field(" MERGEFIELD Floor ")), P(R("Attn: "), Field(" MERGEFIELD Contact ")),
+                P(Field(" MERGEFIELD City "), R(", "), Field(" MERGEFIELD State ")));
+            var text = Text(Merge.Fill(doc, V(("Name", "Ann"), ("Company", ""), ("Street", "1 Main"), ("Unit", ""), ("Floor", ""),
+                ("Contact", ""), ("City", "Taos"), ("State", "NM"))));
+            Check("blank lines: empty field-only lines dropped", text == "Ann\n1 Main\nAttn: \nTaos, NM", text.Replace("\n", "|"));
+        }
+
         // ---- A field list (Use a Field List...): names one a line, or every value of a CSV, once each
         {
             var dir = Path.Combine(Path.GetTempPath(), "dax-fieldlist-" + Guid.NewGuid().ToString("N"));

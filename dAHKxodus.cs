@@ -677,9 +677,12 @@ class MainForm : Form {
             Settings.Set("Merge Skipped", MergeKey, "");
             Settings.Set("Merge Field Lists", MergeKey, "");
             Log($"merge: recipients {path} {table}, {loaded.Columns.Count} column(s), {loaded.Rows.Count} row(s)");
-            Send(new { type = "mergeColumns", columns = loaded.Columns, source = SourceName(path, table) });
+            Send(new { type = "mergeColumns", columns = loaded.Columns, source = SourceName(path, table), rows = PreviewRows(loaded) });
         } finally { asking = false; }
     }
+
+    // The first rows of a data source, for Address Block's and Greeting Line's preview.
+    static List<string[]> PreviewRows(MergeTable table) => table.Rows.Take(100).ToList();
 
     static string SourceName(string path, string table) => Path.GetFileName(path) + (table != "" ? " › " + table : "");
 
@@ -736,18 +739,21 @@ class MainForm : Form {
         var parts = remembered.Split('|', 2);
         var list = Settings.Get("Merge Field Lists", MergeKey, "");
         List<string> columns = new();
+        List<string[]> rows = new();
         var source = "";
         try {
             if (remembered != "" && File.Exists(parts[0])) {
                 var table = parts.Length > 1 ? parts[1] : "";
-                columns = await Task.Run(() => MergeData.Load(parts[0], table).Columns);
+                var loaded = await Task.Run(() => MergeData.Load(parts[0], table));
+                columns = loaded.Columns;
+                rows = PreviewRows(loaded);
                 source = SourceName(parts[0], table);
             } else if (list != "" && File.Exists(list)) {
                 columns = await Task.Run(() => MergeData.FieldList(list));
                 source = Lang.T("mergeData.fieldListName", Path.GetFileName(list));
             }
         } catch (Exception ex) { Log($"merge data {remembered}{list}: {ex.Message}"); }
-        if (!web.IsDisposed) Send(new { type = "mergeColumns", columns, source });
+        if (!web.IsDisposed) Send(new { type = "mergeColumns", columns, source, rows });
     }
 
     // A merged document in a new window (or this one, if it holds only an untouched new document).

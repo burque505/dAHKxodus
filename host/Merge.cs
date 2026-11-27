@@ -160,6 +160,8 @@ public static class Merge {
             foreach (var part in Parts(doc)) {
                 var xml = Load(part);
                 var root = xml.Root!;
+                // (Word's "don't print blank lines": a paragraph of merge fields only, all of them empty, is dropped)
+                var fieldLines = root.Descendants(P).Where(IsFieldLine).ToList();
                 // fields, innermost first, again after each change (an IF's texts change paragraphs)
                 for (var guard = 0; guard < 10000; guard++) {
                     var field = FieldTree.Read(root).SelectMany(Flatten).FirstOrDefault(f => f.Children.Count == 0 && Handles(f, asked));
@@ -169,6 +171,7 @@ public static class Merge {
                 foreach (var simple in root.Descendants(FldSimple).ToList()) EvaluateSimple(simple, map, asked);
                 FillControls(root, map);
                 foreach (var p in root.Descendants(P).ToList()) FillPlaceholders(p, map, markers);
+                foreach (var p in fieldLines) if (p.Parent != null && IsBlankAfterMerge(p)) p.Remove();
                 Store(part, xml);
             }
             // (Word's data source: the merged document has none)
@@ -179,6 +182,37 @@ public static class Merge {
             }
         }
         return ms.ToArray();
+    }
+
+    // A paragraph whose only text is merge fields' (MERGEFIELD, in a complex or simple field): outside its fields it
+    // has nothing but spaces.
+    static bool IsFieldLine(XElement p) {
+        var depth = 0;
+        var merge = false;
+        var outside = new StringBuilder();
+        foreach (var x in p.Descendants()) {
+            if (x.Name == FldChar) {
+                var type = (string?)x.Attribute(FldCharType);
+                if (type == "begin") depth++;
+                else if (type == "end" && depth > 0) depth--;
+            } else if (x.Name == InstrText) {
+                if (Regex.IsMatch(x.Value, @"^\s*MERGEFIELD\b", RegexOptions.IgnoreCase)) merge = true;
+            } else if (x.Name == FldSimple) {
+                if (Regex.IsMatch((string?)x.Attribute(Instr) ?? "", @"^\s*MERGEFIELD\b", RegexOptions.IgnoreCase)) merge = true;
+            } else if (x.Name == T && depth == 0 && !x.Ancestors(FldSimple).Any()) outside.Append(x.Value);
+        }
+        return merge && string.IsNullOrWhiteSpace(outside.ToString());
+    }
+
+    // Such a paragraph that merged to nothing: no text, no picture or other content, and not one a document needs (it
+    // ends a section, or is all its cell has).
+    static bool IsBlankAfterMerge(XElement p) {
+        if (p.Descendants(T).Any(t => !string.IsNullOrWhiteSpace(t.Value))) return false;
+        if (p.Descendants().Any(x => x.Name.LocalName is "drawing" or "pict" or "object" or "tab" or "br" or "sym")) return false;
+        if (p.Element(PPr)?.Element(W + "sectPr") != null) return false;
+        if (p.Parent?.Name == W + "tc" && p.Parent.Elements(P).Count() == 1) return false;
+        if (p.Parent?.Name == W + "body" && p.Parent.Elements(P).Count() == 1) return false;
+        return true;
     }
 
     static string Get(Dictionary<string, string> map, string name) => map.TryGetValue(name, out var v) ? v ?? "" : "";
