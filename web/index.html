@@ -2555,6 +2555,7 @@ host?.addEventListener("message", async (e) => {
       ribbon.setSystemFonts?.(m.names ?? []);
       ribbon.setRecentFonts?.(m.recent ?? []);
       ribbon.setCaptionLabels?.(m.captionLabels ?? []);
+      ribbon.setReturnAddress?.(m.returnAddress ?? "");
     } else if (m.type === "mergeColumns") {
       // The data source's columns (Select Recipients, or the one this document's merge remembers): Insert Merge Field's.
       ribbon.setMergeColumns?.(m.columns ?? [], m.source ?? "", m.rows ?? []);
@@ -2734,6 +2735,8 @@ ribbon = mountRibbon("#app", {
   onRecentFontsChange: (names) => post({ type: "recentFonts", names }),
   // Insert Caption's own labels (New Label): the host keeps them ([Captions] Labels).
   onCaptionLabelsChange: (labels) => post({ type: "captionLabels", labels }),
+  // Mailings > Envelopes' return address: the host keeps it ([Envelopes] ReturnAddress).
+  onReturnAddressChange: (text) => post({ type: "returnAddress", text }),
   // Mailings > Start Mail Merge..., Select Recipients (list, field list, edit, clear), Finish & Merge..., and the Merge
   // Fields pane's Browse... and Clear: the host's (its data sources, its dialogs).
   onMailings: (command) => post({ type: "mailings", command }),

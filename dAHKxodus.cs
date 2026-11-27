@@ -22,6 +22,7 @@
 #load "host\Hooks.cs"
 #load "host\RibbonButtons.cs"
 #load "host\Snippets.cs"
+#load "host\PrintPages.cs"
 #load "dax_extensions.cs"
 // dAHKxodus: a WebView2 window showing Docxodus's ribbon editor (web\index.html), hosted by dAHKxodus.ahk.
 // args: [0] the AHK script's window (bridge calls go there as WM_COPYDATA), [1] the program folder,
@@ -405,7 +406,11 @@ class MainForm : Form {
             : Settings.Get("Fonts", "Recent").Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var captionLabels = measureOut != "" ? Array.Empty<string>()
             : Settings.Get("Captions", "Labels").Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        Send(new { type = "fonts", names = installedFonts, recent, captionLabels });
+        // (Mailings > Envelopes' return address: [Envelopes] ReturnAddress, its lines as a JSON string)
+        var returnAddress = "";
+        if (measureOut == "")
+            try { returnAddress = JsonSerializer.Deserialize<string>(Settings.Get("Envelopes", "ReturnAddress", "\"\"")) ?? ""; } catch (JsonException) { }
+        Send(new { type = "fonts", names = installedFonts, recent, captionLabels, returnAddress });
     }
 
     // The labels the page adds to the ribbon, in the user's language.
@@ -1251,6 +1256,10 @@ class MainForm : Form {
                         Settings.Set("Fonts", "Recent", string.Join("|", names.EnumerateArray().Select(n => n.GetString() ?? "")
                             .Where(n => n != "" && !n.Contains('|'))));
                     break;
+                case "returnAddress":  // Mailings > Envelopes' return address, for the next envelope
+                    if (measureOut != "") break;
+                    Settings.Set("Envelopes", "ReturnAddress", JsonSerializer.Serialize(Str("text")));
+                    break;
                 case "captionLabels":  // Insert Caption's New Label / Delete Label: [Captions] Labels, for the next window and start
                     if (measureOut != "") { Log("caption labels (measure run, not kept): " + Str("labels")); break; }
                     if (m.TryGetProperty("labels", out var labels) && labels.ValueKind == JsonValueKind.Array)
@@ -1400,7 +1409,60 @@ class MainForm : Form {
         var size = await PreparePrintAsync();
         if (size == null) { MessageBox.Show(this, Lang.T("print.failed", DocName), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         Log($"print: {size.Value.pages} pages, {size.Value.width} x {size.Value.height} in");
+        // (pages that are not the printer's default paper, an envelope: each on paper of its size, as Word sends them)
+        var pages = PrintPages.Parse(size.Value.sizes);
+        if (pages.Count > 0 && !PrintPages.FitDefaultPaper(pages)) { await PrintBySizeAsync(pages); return; }
         web.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
+    }
+
+    // Print pages of their own paper sizes: the printer, copies and pages asked here, then a job for each run of pages
+    // of one size, with that paper size (the driver picks its form of that size: Envelope #10 for a #10 envelope), no
+    // margins and none of the browser's headers and footers. The page's view is put back after.
+    async Task PrintBySizeAsync(List<(double w, double h)> pages) {
+        string printer;
+        int copies, first, last;
+        asking = true;
+        try {
+            using var dlg = new PrintPagesDialog(DocName, pages);
+            if (dlg.ShowDialog(this) != DialogResult.OK) { Send(new { type = "printDone" }); return; }
+            (printer, copies, first, last) = (dlg.Printer, dlg.Copies, dlg.First, dlg.Last);
+        } finally { asking = false; }
+        var failed = new List<string>();
+        foreach (var run in PrintPages.Runs(pages, first, last)) {
+            var settings = web.CoreWebView2.Environment.CreatePrintSettings();
+            settings.PrinterName = printer;
+            settings.Copies = copies;
+            settings.PageRanges = $"{run.first}-{run.last}";
+            settings.ShouldPrintHeaderAndFooter = false;
+            settings.ShouldPrintBackgrounds = true;
+            settings.MarginTop = settings.MarginBottom = settings.MarginLeft = settings.MarginRight = 0;
+            settings.ScaleFactor = 1;
+            double wIn = run.w / 72, hIn = run.h / 72;
+            var landscape = wIn > hIn;
+            settings.Orientation = landscape ? CoreWebView2PrintOrientation.Landscape : CoreWebView2PrintOrientation.Portrait;
+            // The printer's own form of that size (COM#10 for a #10 envelope), made this user's paper on it for the job
+            // and put back after, as choosing it by hand does: a driver takes its own forms, where many ignore a
+            // custom size. With no such form, a custom size (the short side across, a wide page turned on it).
+            var form = PrintPages.FormOf(printer, (run.w, run.h));
+            IDisposable? paper = form is { } f ? PrintPages.UsePaper(printer, f.kind, landscape) : null;
+            if (paper != null) settings.MediaSize = CoreWebView2PrintMediaSize.Default;
+            else {
+                settings.MediaSize = CoreWebView2PrintMediaSize.Custom;
+                settings.PageWidth = Math.Min(wIn, hIn);
+                settings.PageHeight = Math.Max(wIn, hIn);
+            }
+            CoreWebView2PrintStatus status;
+            try { status = await web.CoreWebView2.PrintAsync(settings); }
+            catch (Exception ex) { Log("print: " + ex.Message); status = CoreWebView2PrintStatus.OtherError; }
+            finally { paper?.Dispose(); }
+            Log($"print: pages {run.first}-{run.last}, {PrintPages.Name((run.w, run.h))}, on {printer} " +
+                (paper != null ? $"as its form {form!.Value.name} ({form.Value.kind})" : form != null ? $"(its form {form.Value.name} could not be set: a custom size)" : "(no form of that size: a custom size)") + $": {status}");
+            if (status != CoreWebView2PrintStatus.Succeeded) failed.Add($"{run.first}-{run.last} ({status})");
+        }
+        Send(new { type = "printDone" });
+        if (failed.Count > 0)
+            MessageBox.Show(this, Lang.T("printPages.failed", printer, string.Join(", ", failed)), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        else SendStatus(Lang.T("printPages.sent", printer));
     }
 
     // File > Export to PDF: asks where (the document's name and folder to start), writes the PDF, puts the view back.
