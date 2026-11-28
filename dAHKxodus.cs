@@ -8,6 +8,9 @@
 #r "lib\docxodus\DocumentFormat.OpenXml.Framework.dll"
 #r "lib\docxodus\System.IO.Packaging.dll"
 // (the Docxodus engine, run natively: build-engine.ps1 builds it from the Docxodus fork and copies it here)
+#r "lib\docsharp\DocSharp.Binary.Common.dll"
+#r "lib\docsharp\DocSharp.Binary.Doc.dll"
+// (opening .doc: build-docsharp.ps1 builds it from the DocSharp fork and copies it here)
 #load "host\Settings.cs"
 #load "host\Lang.cs"
 #load "host\SettingsDialog.cs"
@@ -17,6 +20,7 @@
 #load "host\MergeDialog.cs"
 #load "host\Recovery.cs"
 #load "host\Formats.cs"
+#load "host\Import.cs"
 #load "host\MacroHotkeys.cs"
 #load "host\MacroDialog.cs"
 #load "host\Hooks.cs"
@@ -130,6 +134,10 @@ class MainForm : Form {
 
     // The document: its file ("" until it is saved), and whether it has changed since (the page's ribbon says).
     string current;
+    // An older format's file the document was converted from (host\Import.cs: a .doc), while it is not saved yet:
+    // it names the document (report.doc -> report.docx) and Save As starts in its folder. "" for anything else.
+    string importedFrom = "";
+    bool importNotice;      // say on the status bar, once the page has it open, what the document was converted from
     bool dirty;
     bool closeConfirmed;    // the user has answered the ask-to-save question; the next Close goes through
     bool asking;            // a question or a file dialog is up: another request waits its turn
@@ -281,7 +289,9 @@ class MainForm : Form {
 
     void Send(object message) => web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
 
-    string DocName => current == "" ? (newMacro ? Path.ChangeExtension(Untitled, ".docm") : Untitled) : Path.GetFileName(current);
+    string DocName => current != "" ? Path.GetFileName(current)
+        : importedFrom != "" ? Path.ChangeExtension(Path.GetFileName(importedFrom), ".docx")
+        : newMacro ? Path.ChangeExtension(Untitled, ".docm") : Untitled;
 
     // "*report.docx - dAHKxodus": the star while the document has changes not saved.
     void UpdateTitle() => Text = (Changed ? "*" : "") + DocName + " - dAHKxodus";
@@ -511,6 +521,19 @@ class MainForm : Form {
             if (!asNew && ex is FileNotFoundException or DirectoryNotFoundException) { RecentFiles.Remove(path); Everywhere(w => w.SendRecent()); }
             return false;
         }
+        // An older format (host\Import.cs): converted here, then opened as a new document named like the file.
+        var imported = !asNew && Import.Handles(path);
+        if (imported) {
+            var started = clock.ElapsedMilliseconds;
+            try {
+                bytes = Import.ToDocx(bytes);
+            } catch (Import.ImportException ex) {
+                Log($"open {path}: not converted ({ex.Key} {ex.Detail})");
+                if (measureOut == "" && !quiet) MessageBox.Show(this, Lang.T("file.openFailed", path, Lang.T(ex.Key, ex.Detail)), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+            Log($"open {Path.GetFileName(path)}: converted to .docx in {clock.ElapsedMilliseconds - started} ms");
+        }
         if (asNew || Templates.IsTemplate(path)) bytes = Templates.ToDocument(bytes);
         if (asNew && values != null) bytes = Merge.Fill(bytes, values);
         else if (asNew && askMerge && !quiet && measureOut == "" && Merge.Scan(bytes) is { Count: > 0 } fields) {
@@ -526,15 +549,19 @@ class MainForm : Form {
         return true;
 
         void Deliver(byte[] bytes) {
-            current = asNew ? "" : Path.GetFullPath(path);
+            // (a converted file is not the document's file: the document has none until it is saved as .docx)
+            current = asNew || imported ? "" : Path.GetFullPath(path);
+            importedFrom = imported ? Path.GetFullPath(path) : "";
+            importNotice = imported;
             newMacro = asNew && Path.GetExtension(path).ToLowerInvariant() is ".dotm" or ".docm";
             if (asNew) newRequested = true;    // (the page's "opened" then runs the NewDocument hook, as for a blank one)
             dirty = recovered = false;
             ClearRecovery();    // (the document before it went as the user chose)
             UpdateTitle();
-            if (measureOut == "" && !asNew) { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
+            // (Recent keeps the old file itself: opening it from there converts it again)
+            if (measureOut == "" && !asNew) { RecentFiles.Add(Path.GetFullPath(path)); Everywhere(w => w.SendRecent()); }
             Log($"open {Path.GetFileName(path)}{(asNew ? " as a new document" : "")} ({bytes.Length:N0} bytes) at {clock.ElapsedMilliseconds} ms");
-            Send(new { type = "open", name = asNew ? DocName : Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
+            Send(new { type = "open", name = asNew || imported ? DocName : Path.GetFileName(path), b64 = Convert.ToBase64String(bytes) });
         }
     }
 
@@ -806,7 +833,7 @@ class MainForm : Form {
 
     void StartBlank() {
         newRequested = true;    // (the page's blankOpened then runs the NewDocument hook)
-        current = "";
+        current = importedFrom = "";
         newMacro = false;
         dirty = recovered = false;
         ClearRecovery();
@@ -836,7 +863,8 @@ class MainForm : Form {
     void OpenPath(string path, bool editTemplate = false) {
         var full = Path.GetFullPath(path);
         if (Templates.IsTemplate(full) && !editTemplate) { NewFromTemplate(full); return; }
-        var open = Windows.FirstOrDefault(w => string.Equals(w.current, full, StringComparison.OrdinalIgnoreCase));
+        var open = Windows.FirstOrDefault(w => string.Equals(w.current, full, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(w.importedFrom, full, StringComparison.OrdinalIgnoreCase));
         if (open != null) { open.BringForward(); return; }
         if (Untouched) OpenFile(full);
         else OpenWindow(full, this, editTemplate: true);
@@ -960,7 +988,8 @@ class MainForm : Form {
                     FileName = asTemplate ? Path.GetFileNameWithoutExtension(DocName) : DocName,
                     FilterIndex = asTemplate ? (macros ? 2 : 1)
                         : Path.GetExtension(DocName).ToLowerInvariant() switch { ".docm" => 2, ".dotx" => 3, ".dotm" => 4, _ => 1 },
-                    InitialDirectory = asTemplate ? Templates.Folder : current != "" ? Path.GetDirectoryName(current) : "",
+                    InitialDirectory = asTemplate ? Templates.Folder : current != "" ? Path.GetDirectoryName(current)
+                        : importedFrom != "" ? Path.GetDirectoryName(importedFrom) : "",
                 };
                 if (asTemplate) Directory.CreateDirectory(Templates.Folder);
                 if (dlg.ShowDialog(this) != DialogResult.OK) return false;
@@ -977,6 +1006,7 @@ class MainForm : Form {
             return false;
         }
         current = Path.GetFullPath(path);
+        importedFrom = "";
         Log($"saved {Path.GetFileName(current)} ({bytes.Length:N0} bytes)");
         if (measureOut == "") { RecentFiles.Add(current); Everywhere(w => w.SendRecent()); }
         // The page marks the document saved (its ribbon's markSaved) and answers "dirty" false; the title loses its
@@ -1112,6 +1142,7 @@ class MainForm : Form {
                     if (measureOut != "" && !measureStarted) { measureStarted = true; Send(new { type = "measure" }); }
                     DocumentReady(true);
                     SendMergeColumns();
+                    if (importNotice) { importNotice = false; SendStatus(Lang.T("import.converted", Path.GetFileName(importedFrom))); }
                     break;
                 case "mailings":    // Mailings > Start Mail Merge..., Select Recipients..., Finish & Merge...
                     switch (Str("command")) {
@@ -1133,7 +1164,8 @@ class MainForm : Form {
                     documentWait?.TrySetResult(false);
                     documentWait = null;
                     if (!scriptOpen) MessageBox.Show(this, Lang.T("file.openFailed", DocName, Str("error")), "dAHKxodus", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    current = "";
+                    current = importedFrom = "";
+                    importNotice = false;
                     UpdateTitle();
                     Send(new { type = "blank", name = Untitled });
                     break;
@@ -1299,7 +1331,7 @@ class MainForm : Form {
                     break;
                 case "drop":    // files dropped on the page (postMessageWithAdditionalObjects): open the first document
                     var dropped = e.AdditionalObjects?.OfType<CoreWebView2File>().Select(f => f.Path)
-                        .FirstOrDefault(p => Path.GetExtension(p).ToLowerInvariant() is ".docx" or ".docm" or ".dotx" or ".dotm");
+                        .FirstOrDefault(p => Path.GetExtension(p).ToLowerInvariant() is ".docx" or ".docm" or ".dotx" or ".dotm" || Import.Handles(p));
                     if (dropped != null) { Activate(); OpenPath(dropped); }
                     break;
                 case "ahk":    // a Bridge function in dAHKxodus.ahk; its answer comes later (WndProc: ahkResult)

@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 if (-not (Test-Path (Join-Path $root "lib\docxodus\Docxodus.dll"))) { throw "lib\docxodus is missing: run .\build-engine.ps1 first" }
+if (-not (Test-Path (Join-Path $root "lib\docsharp\DocSharp.Binary.Doc.dll"))) { throw "lib\docsharp is missing: run .\build-docsharp.ps1 first" }
 $out = Join-Path $root "vs\publish"
 $r2r = if ($NoReadyToRun) { "false" } else { "true" }
 dotnet publish (Join-Path $root "vs\dAHKxodus.csproj") -c $Configuration -r win-x64 --self-contained false `

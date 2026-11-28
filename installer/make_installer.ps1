@@ -98,6 +98,8 @@ try {
 		Expand-Archive $archive $src
 	}
 	Copy-Item (Join-Path $root "lib\docxodus") (Join-Path $src "lib\docxodus") -Recurse -Force
+	if (-not (Test-Path (Join-Path $root "lib\docsharp\DocSharp.Binary.Doc.dll"))) { throw "lib\docsharp is missing: run .\build-docsharp.ps1 first" }
+	Copy-Item (Join-Path $root "lib\docsharp") (Join-Path $src "lib\docsharp") -Recurse -Force
 
 	# the .NET the full edition carries: the latest .NET 10 (a security fix most months), pinned by
 	# RuntimeFrameworkVersion (else the SDK's own, often older). The light edition isn't pinned: any .NET 10 installed
@@ -194,7 +196,7 @@ try {
 			$_.Extension -in ".ahk", ".cs", ".txt", ".md", ".json", ".html", ".css", ".ini", ".js" -and $_.FullName -notlike "*\node_modules\*"
 		}
 		$hits = @($texts | Select-String -Pattern $pattern -List)
-		$built = @(Get-ChildItem $folder -File | Where-Object { $_.Name -in "dAHKxodus.dll", "dAHKxodus.exe", "Docxodus.dll", "DocxodusNativeBridge.dll" }) +
+		$built = @(Get-ChildItem $folder -File | Where-Object { $_.Name -in "dAHKxodus.dll", "dAHKxodus.exe", "Docxodus.dll", "DocxodusNativeBridge.dll", "DocSharp.Binary.Doc.dll", "DocSharp.Binary.Common.dll" }) +
 			@(Get-ChildItem (Join-Path $toPackage "dist") -Recurse -File -Include *.js, *.wasm, *.dll)
 		foreach ($file in $built) {
 			$bytes = [IO.File]::ReadAllBytes($file.FullName)

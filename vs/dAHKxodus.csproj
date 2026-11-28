@@ -53,6 +53,8 @@
     <Reference Include="DocumentFormat.OpenXml" HintPath="$(DaxSources)\lib\docxodus\DocumentFormat.OpenXml.dll" />
     <Reference Include="DocumentFormat.OpenXml.Framework" HintPath="$(DaxSources)\lib\docxodus\DocumentFormat.OpenXml.Framework.dll" />
     <Reference Include="System.IO.Packaging" HintPath="$(DaxSources)\lib\docxodus\System.IO.Packaging.dll" />
+    <Reference Include="DocSharp.Binary.Common" HintPath="$(DaxSources)\lib\docsharp\DocSharp.Binary.Common.dll" />
+    <Reference Include="DocSharp.Binary.Doc" HintPath="$(DaxSources)\lib\docsharp\DocSharp.Binary.Doc.dll" />
     <!-- (native: found beside Microsoft.Web.WebView2.Core.dll) -->
     <None Include="$(DaxSources)\lib\webview2\WebView2Loader.dll" Link="WebView2Loader.dll"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

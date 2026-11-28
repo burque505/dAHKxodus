@@ -2696,7 +2696,8 @@ window.addEventListener("keydown", (e) => {
 // A Word document dropped on the window opens in it (the host asks to save the one open first). WebView2 hands the
 // host the dropped File objects, from which it gets their paths. Any other file dropped where the editor doesn't take
 // it must not make the page navigate to it.
-const isWordFile = (f) => /\.(docx|docm|dotx|dotm)$/i.test(f.name);
+// (.doc: the host converts it, host\Import.cs)
+const isWordFile = (f) => /\.(docx|docm|dotx|dotm|doc)$/i.test(f.name);
 window.addEventListener("dragover", (e) => {
   if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }
 }, true);

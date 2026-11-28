@@ -1,0 +1,6 @@
+# The DocSharp fork commit dAHKxodus's .doc converter is built from. build-docsharp.ps1 builds exactly this commit and
+# refuses any other. To move to a newer fork commit: check it out in the fork's clone, build with -UpdateLock, test,
+# commit this file.
+repo=https://github.com/burque505/DocSharp
+branch=fix/doc-fixes
+commit=ad1cea7725babd56f12ef0859298c8185b588073

@@ -14,6 +14,15 @@ Not included in this repository: `build-engine.ps1` builds them from the Docxodu
 
 The npm package carries further libraries of its own; their notices are in `web\node_modules\docxodus` after a build.
 
+## Built from source by `build-docsharp.ps1`
+
+Not included in this repository: `build-docsharp.ps1` builds them from the DocSharp fork commit named in [`docsharp.lock`](docsharp.lock).
+
+| Component | Used for | License | Text |
+|---|---|---|---|
+| [DocSharp](https://github.com/manfromarce/DocSharp) (DocSharp.Binary.Doc, DocSharp.Binary.Common), from the fork [burque505/DocSharp](https://github.com/burque505/DocSharp) | Opening Word 97-2003 documents (.doc), in `lib\docsharp` | MIT | [DocSharp-MIT.txt](licenses/DocSharp-MIT.txt) |
+| [b2xtranslator](https://github.com/EvolutionJobs/b2xtranslator), which DocSharp.Binary continues | The .doc reader DocSharp builds on | BSD 3-Clause | [b2xtranslator-BSD-3-Clause.txt](licenses/b2xtranslator-BSD-3-Clause.txt) |
+
 ## Included in this repository
 
 | Component | Where | License | Text |

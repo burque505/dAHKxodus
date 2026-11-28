@@ -34,15 +34,16 @@ dAHKxodus itself adds what only a Windows program can: files, printing, AutoHotk
   document or template, as Word's Organizer copies them in); Outline View (done: View >
   Outline and the Outlining tab: collapse and expand, Show Level, promote, demote and move with Word's Alt+Shift keys;
   Left and Right now cross paragraphs everywhere)
-- [ ] **8. Formats and parts:** left over from 7: a Styles pane (every style, with Modify, New and Update to Match),
-  Insert Caption and a table of figures (captions numbered by fields that Update Table renumbers); RTF, OpenDocument and .doc through a converter found on the computer (LibreOffice,
-  Word or Pandoc); opening those formats; templates (done); snippets (done: Insert > Snippets, kept as HTML or
-  text, with hotkeys); mail merge (done: a template's or document's
-  fields filled from the Mail Merge dialog, saved records or a script; data sources from CSV, Excel, JSON, Access or
-  a pasted list, a row at a time in the dialog, merged as one document, all rows in one, or a Word file or PDF per
-  row; later: inserting merge fields,
-  Address Block, Greeting Line, envelopes and labels); table selection (done: cells, rows, columns and whole tables,
-  the ⊞ handle and Table Layout > Select)
+- [ ] **8. Formats and parts:** left over from 7: a Styles pane (done: every style, with Modify, New and Update to
+  Match), Insert Caption and a table of figures (done: captions numbered by fields that Update Table renumbers); RTF,
+  OpenDocument and .doc through a converter found on the computer (LibreOffice, Word or Pandoc); opening those
+  formats; templates (done); snippets (done: Insert > Snippets, kept as HTML or text, with hotkeys); mail merge
+  (done: a template's or document's fields filled from the Mail Merge dialog, saved records or a script; data
+  sources from CSV, Excel, JSON, Access or a pasted list, a row at a time in the dialog, merged as one document, all
+  rows in one, or a Word file or PDF per row); the Mailings tab (done: a Merge Fields pane to insert, format and edit
+  merge fields; recipients chosen, edited or cleared; Address Block, Greeting Line and Rules; envelopes printed on
+  their own paper size; labels in Avery and custom sizes; Preview Results a record at a time); table selection
+  (done: cells, rows, columns and whole tables, the ⊞ handle and Table Layout > Select)
 - [ ] **9. Spanish:** the whole program, the ribbon included
 - [ ] **10. Text boxes:** editing in them, then inserting and moving them
 - [ ] **11. Compare and find commands:** Review > Compare two versions of a document, the differences shown as

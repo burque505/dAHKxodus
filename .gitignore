@@ -1,5 +1,7 @@
 # built by build-engine.ps1 from the fork commit in docxodus.lock
 lib/docxodus/
+# built by build-docsharp.ps1 from the fork commit in docsharp.lock
+lib/docsharp/
 web/vendor/
 web/node_modules/
 # runtime
