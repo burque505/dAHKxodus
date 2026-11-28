@@ -68,6 +68,20 @@ static class Program {
             Check("next: the second copy row 3, then nothing", t2.Contains("Cy #3") && t2.Contains("copy 2") && !t2.Contains("Ann"), t2.Replace("\n", "|"));
             Check("next: the copy's first row", copies[1].First["Name"] == "Cy", copies[1].First["Name"]);
 
+            // a sheet of labels with more labels than rows: the labels past the last row blank, the comma too
+            XElement Label(bool next) => new(W + "tc",
+                P(next ? Field(" NEXT ") : null, Field(" MERGEFIELD Name ")),
+                P(Field(" MERGEFIELD City "), R(", "), Field(" MERGEFIELD State ")));
+            var sheet = Make(new XElement(W + "tbl", new XElement(W + "tblGrid"), new XElement(W + "tr", Label(false), Label(true)),
+                new XElement(W + "tr", Label(true), Label(true))));
+            var cityRow = (string n) => V(("Name", n), ("City", "Taos"), ("State", "NM"));
+            var three = Merge.MergeAll(sheet, new[] { cityRow("Ann"), cityRow("Bob"), cityRow("Cy") });
+            var sheetText = Text(three[0].Bytes);
+            Check("labels: one sheet for three rows", three.Count == 1, three.Count.ToString());
+            Check("labels: three labels filled", sheetText.Contains("Cy\nTaos, NM"), sheetText.Replace("\n", "|"));
+            Check("labels: the fourth label blank, no comma", sheetText.Split('\n').Count(l => l.Trim() == ",") == 0 && Count(three[0].Bytes, "tc") == 4,
+                sheetText.Replace("\n", "|"));
+
             var skip = Make(P(Begin(), Instr(" SKIPIF "), Field(" MERGEFIELD Status "), Instr(" = \"void\" "), Separate(), End(),
                 R("To "), Field(" MERGEFIELD Name "), R(" ("), Field(" MERGESEQ "), R(")")));
             var kept = Merge.MergeAll(skip, new[] { Row("Ann"), Row("Bob", "void"), Row("Cy") });

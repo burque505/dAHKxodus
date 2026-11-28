@@ -1000,6 +1000,8 @@
   "Avery 5167 Return Address (1/2 x 1 3/4 in, 80 per sheet)": "Avery 5167 Remite (1/2 x 1 3/4 pulg., 80 por hoja)",
   "Avery L7163 Address (99.1 x 38.1 mm, 14 per sheet)": "Avery L7163 Dirección (99,1 x 38,1 mm, 14 por hoja)",
   "Preview Results": "Vista previa de resultados",
+  "Skipped": "Omitido",
+  "A Skip Record If leaves this record out of the merge": "Un Omitir registro si deja este registro fuera de la combinación",
   "👁 Preview Results": "👁 Vista previa de resultados",
   "Show each merge field's value for a recipient, as the merge will fill it (the document does not change)": "Mostrar el valor de cada campo de combinación para un destinatario, como lo rellenará la combinación (el documento no cambia)",
   "First record": "Primer registro",

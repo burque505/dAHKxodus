@@ -193,11 +193,18 @@ public static class Merge {
                 foreach (var f in FieldTree.Read(xml.Root!).SelectMany(Flatten))
                     if (FieldWord(f.PlainCode()) == "ASK" && Arguments(f.PlainCode()) is { Count: > 1 } a)
                         asked[a[1]] = Get(map, a[1]) is { Length: > 0 } v ? v : Switch(f.PlainCode(), 'd') ?? "";
+            // Labels past the last record: a table cell whose merge fields all read a row after the last one is emptied,
+            // as Word leaves those labels blank (the text between the fields, a comma, would print otherwise).
+            var pastCells = new Dictionary<XElement, bool>();
             // Records: the body's fields in order, NEXT and NEXTIF moving to the next row, SKIPIF leaving the record out
             if (parts.Count > 0) {
                 var offset = 0;
                 foreach (var f in FieldTree.Read(parts[0].xml.Root!)) {
-                    foreach (var each in Flatten(f)) each.Begin.AddAnnotation(new RecordTag(offset));
+                    foreach (var each in Flatten(f)) {
+                        each.Begin.AddAnnotation(new RecordTag(offset));
+                        if (FieldWord(each.PlainCode()) == "MERGEFIELD" && each.Begin.Ancestors(W + "tc").FirstOrDefault() is { } cell)
+                            pastCells[cell] = (pastCells.TryGetValue(cell, out var past) ? past : true) && start + offset >= rows.Count;
+                    }
                     switch (FieldWord(f.PlainCode())) {
                         case "NEXT": offset++; break;
                         case "NEXTIF": if (Condition(f, RowAt(offset))) offset++; break;
@@ -221,6 +228,10 @@ public static class Merge {
                 FillControls(root, map);
                 foreach (var p in root.Descendants(P).ToList()) FillPlaceholders(p, map, markers);
                 foreach (var p in fieldLines) if (p.Parent != null && IsBlankAfterMerge(p)) p.Remove();
+                // (the cells' paragraphs kept, their formatting too, so the sheet's rows keep their places)
+                foreach (var (cell, past) in pastCells)
+                    if (past && cell.Document == xml)
+                        foreach (var p in cell.Elements(P)) p.Nodes().Where(n => n is not XElement e || e.Name != PPr).ToList().ForEach(n => n.Remove());
                 Store(part, xml);
             }
             // (Word's data source: the merged document has none)
