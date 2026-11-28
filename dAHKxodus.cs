@@ -690,7 +690,11 @@ class MainForm : Form {
     }
 
     // The first rows of a data source, for Address Block's and Greeting Line's preview.
-    static List<string[]> PreviewRows(MergeTable table) => table.Rows.Take(100).ToList();
+    // The rows the merge takes (the ones unticked in Edit Recipient List left out), for the previews and Preview Results.
+    List<string[]> PreviewRows(MergeTable table) {
+        var skipped = MergeDialog.LoadSkipped(MergeKey, table.Rows.Count);
+        return table.Rows.Where((_, i) => !skipped.Contains(i)).Take(5000).ToList();
+    }
 
     static string SourceName(string path, string table) => Path.GetFileName(path) + (table != "" ? " › " + table : "");
 
@@ -729,6 +733,7 @@ class MainForm : Form {
             if (!MergeDialog.EditRows(this, Font, data, skipped, 0, out _)) return;
             MergeDialog.SaveSkipped(MergeKey, skipped, data.Rows.Count);
             Log($"merge: {data.Rows.Count - skipped.Count} of {data.Rows.Count} recipient(s) included");
+            SendMergeColumns();
         } finally { asking = false; }
     }
 
